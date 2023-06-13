@@ -67,11 +67,11 @@ func NewMain(app *App, options *Options) (m *Main) {
 	return
 }
 
-func (main *Main) refreshMenuList() {
+func (main *Main) RefreshMenuList() {
 	main.menuList = main.menu.MenuViews()
 }
 
-func (main *Main) refreshMenuTitle() {
+func (main *Main) RefreshMenuTitle() {
 	main.menu.FormatMenuItem(main.menuTitle)
 }
 
@@ -176,7 +176,7 @@ func (main *Main) View(a *App) string {
 		if component == nil {
 			continue
 		}
-		builder.WriteString(component.View(a, &top))
+		builder.WriteString(component.View(a, main, &top))
 	}
 
 	if top < windowHeight {
@@ -184,6 +184,22 @@ func (main *Main) View(a *App) string {
 	}
 
 	return builder.String()
+}
+
+func (main *Main) MenuTitleStartColumn() int {
+	return main.menuTitleStartColumn
+}
+
+func (main *Main) MenuTitleStartRow() int {
+	return main.menuTitleStartRow
+}
+
+func (main *Main) MenuStartColumn() int {
+	return main.menuStartColumn
+}
+
+func (main *Main) MenuStartRow() int {
+	return main.menuStartRow
 }
 
 // title view
@@ -386,8 +402,6 @@ func (main *Main) menuItemView(a *App, index int) (string, int) {
 		var i int
 		if main.options.ScrollTimer != nil {
 			i = int(main.options.ScrollTimer.PassedTime().Milliseconds()/500) % len(r)
-		} else {
-			i = int(time.Now().UnixMilli()) / 500 % len(r)
 		}
 		var s = make([]rune, 0, itemMaxLen-menuTitleLen)
 		for j := i; j < i+itemMaxLen-menuTitleLen; j++ {

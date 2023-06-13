@@ -20,21 +20,19 @@ type MainMenu struct {
 func NewMainMenu() *MainMenu {
 	m := &MainMenu{}
 	m.menus = []model.MenuItem{
-		{Title: "每日推荐歌曲"},
-		{Title: "每日推荐歌单"},
-		{Title: "我的歌单"},
-		{Title: "私人FM"},
-		{Title: "专辑列表"},
-		{Title: "搜索"},
-		{Title: "排行榜"},
-		{Title: "精选歌单"},
-		{Title: "热门歌手"},
-		{Title: "最近播放歌曲"},
-		{Title: "云盘"},
-		{Title: "主播电台"},
-		{Title: "LastFM"},
-		{Title: "帮助"},
-		{Title: "检查更新"},
+		{Title: "Title 1", Subtitle: "subtitle"},
+		{Title: "Title 2", Subtitle: "very long long long long long long long long long long long subtitle"},
+		{Title: "Title 3"},
+		{Title: "Title 4"},
+		{Title: "Title 5"},
+		{Title: "Title 6"},
+		{Title: "Title 7"},
+		{Title: "Title 8"},
+		{Title: "Title 9"},
+		{Title: "Title 10"},
+		{Title: "Title 11"},
+		{Title: "Title 12"},
+		{Title: "Title 13"},
 	}
 
 	return m
@@ -68,8 +66,8 @@ type SecondaryMenu struct {
 func NewSecondaryMenu() *SecondaryMenu {
 	m := &SecondaryMenu{}
 	m.menus = []model.MenuItem{
-		{Title: "测试1"},
-		{Title: "测试2"},
+		{Title: "Submenu 1"},
+		{Title: "Submenu 2"},
 	}
 
 	return m
