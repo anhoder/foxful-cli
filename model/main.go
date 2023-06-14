@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/anhoder/foxful-cli/pkg/util"
+	"github.com/anhoder/foxful-cli/util"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
@@ -100,7 +100,7 @@ func (main *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	case tickMainMsg:
 		return main, nil
 	case tea.WindowSizeMsg:
-		main.doubleColumn = msg.Width >= 75 && main.options.DoubleColumn
+		main.doubleColumn = msg.Width >= 75 && main.options.DualColumn
 
 		// 菜单开始行、列
 		main.menuStartRow = msg.Height / 3

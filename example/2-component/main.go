@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anhoder/foxful-cli/pkg/model"
-	"github.com/anhoder/foxful-cli/pkg/util"
+	"github.com/anhoder/foxful-cli/model"
+	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/muesli/termenv"
 )
@@ -67,7 +67,7 @@ func NewSecondaryMenu() *SecondaryMenu {
 }
 
 func (m *SecondaryMenu) GetMenuKey() string {
-	return "secondary_menu"
+	return "sub_menu"
 }
 
 func (m *SecondaryMenu) MenuViews() []model.MenuItem {
@@ -127,17 +127,14 @@ func (p *Component1) PassedTime() time.Duration {
 }
 
 func main() {
-	var ops = model.DefaultOptions()
+	var (
+		ops      = model.DefaultOptions()
+		app      = model.NewApp(ops)
+		progress = NewComponent1(app)
+	)
 	ops.MainMenu = mainMenu
-	var app = model.NewApp(ops)
-
-	app.With(func(options *model.Options) {
-		progress := NewComponent1(app)
-		ops.Components = []model.Component{
-			progress,
-		}
-		ops.ScrollTimer = progress
-	})
+	ops.Components = []model.Component{progress}
+	ops.ScrollTimer = progress
 
 	fmt.Println(app.Run())
 }

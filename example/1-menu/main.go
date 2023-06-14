@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anhoder/foxful-cli/pkg/model"
+	"github.com/anhoder/foxful-cli/model"
 )
 
 var (

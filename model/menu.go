@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"github.com/anhoder/foxful-cli/pkg/util"
+	"github.com/anhoder/foxful-cli/util"
 	"github.com/muesli/termenv"
 )
 

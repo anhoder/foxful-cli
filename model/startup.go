@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/anhoder/foxful-cli/pkg/util"
+	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fogleman/ease"
 	"github.com/muesli/termenv"

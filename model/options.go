@@ -3,8 +3,8 @@ package model
 import (
 	"time"
 
-	"github.com/anhoder/foxful-cli/pkg/constants"
-	"github.com/anhoder/foxful-cli/pkg/util"
+	"github.com/anhoder/foxful-cli/constants"
+	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -13,18 +13,19 @@ type Options struct {
 	util.ProgressOptions
 
 	InitPage            InitPage
-	AppName             string // 应用名
-	WhetherDisplayTitle bool   // 是否显示标题
-	LoadingText         string // 主页面加载中提示
-	PrimaryColor        string // 主题色
-	MainMenu            Menu   // 主菜单
-	DoubleColumn        bool   // 是否双列显示
-	Components          []Component
-	ProgramOptions      []tea.ProgramOption
+	AppName             string
+	WhetherDisplayTitle bool
+	LoadingText         string
+	PrimaryColor        string
+	MainMenu            Menu                // Entry menu of app
+	DualColumn          bool                // The menu list is displayed as a dual column
+	Components          []Component         // Custom Extra components
+	ProgramOptions      []tea.ProgramOption // Tea program options
 
-	ScrollTimer Timer
-	InitHook    func(a *App)
-	CloseHook   func(a *App)
+	ScrollTimer Timer // Timer for subtitle scrolling display
+
+	InitHook  func(a *App)
+	CloseHook func(a *App)
 }
 
 type StartupOptions struct {
@@ -55,7 +56,7 @@ func DefaultOptions() *Options {
 			LastFullChar:   '#',
 		},
 		WhetherDisplayTitle: true,
-		DoubleColumn:        true,
+		DualColumn:          true,
 		AppName:             constants.PkgName,
 		LoadingText:         constants.LoadingText,
 		PrimaryColor:        constants.RandomColor,

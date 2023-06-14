@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anhoder/foxful-cli/pkg/constants"
+	"github.com/anhoder/foxful-cli/constants"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/termenv"
