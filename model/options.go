@@ -17,12 +17,13 @@ type Options struct {
 	WhetherDisplayTitle bool
 	LoadingText         string
 	PrimaryColor        string
-	MainMenu            Menu                // Entry menu of app
-	DualColumn          bool                // The menu list is displayed as a dual column
-	Components          []Component         // Custom Extra components
-	ProgramOptions      []tea.ProgramOption // Tea program options
+	MainMenu            Menu        // Entry menu of app
+	DualColumn          bool        // The menu list is displayed as a dual column
+	Components          []Component // Custom Extra components
+	HideMenu            bool
 
-	ScrollTimer Timer // Timer for subtitle scrolling display
+	ProgramOptions []tea.ProgramOption // Tea program options
+	ScrollTimer    Timer               // Timer for subtitle scrolling display
 
 	InitHook  func(a *App)
 	CloseHook func(a *App)

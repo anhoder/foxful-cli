@@ -150,10 +150,10 @@ func (main *Main) View(a *App) string {
 		return ""
 	}
 
-	var builder strings.Builder
-
-	// 距离顶部的行数
-	top := 0
+	var (
+		builder strings.Builder
+		top     int // 距离顶部的行数
+	)
 
 	// title
 	if main.options.WhetherDisplayTitle {
@@ -162,14 +162,19 @@ func (main *Main) View(a *App) string {
 		top++
 	}
 
-	// menu title
-	builder.WriteString(main.menuTitleView(a, &top, nil))
+	if !main.options.HideMenu {
+		// menu title
+		builder.WriteString(main.menuTitleView(a, &top, nil))
 
-	// menu list
-	builder.WriteString(main.menuListView(a, &top))
+		// menu list
+		builder.WriteString(main.menuListView(a, &top))
 
-	// search input
-	builder.WriteString(main.searchInputView(a, &top))
+		// search input
+		builder.WriteString(main.searchInputView(a, &top))
+	} else {
+		builder.WriteString("\n\n\n")
+		top += 2
+	}
 
 	// components view
 	for _, component := range main.components {

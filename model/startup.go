@@ -28,7 +28,6 @@ type StartupPage struct {
 	loadedDuration time.Duration
 	loadedPercent  float64
 	loaded         bool
-	quitting       bool
 	nextPage       Page
 }
 
