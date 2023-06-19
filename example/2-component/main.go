@@ -105,7 +105,7 @@ func NewComponent1(app *model.App) *Component1 {
 	return p
 }
 
-func (p *Component1) Update(msg tea.Msg, a *model.App) {
+func (p *Component1) Update(_ tea.Msg, _ *model.App) {
 	return
 }
 

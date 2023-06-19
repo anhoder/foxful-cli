@@ -87,6 +87,7 @@ func (m *SecondaryMenu) SubMenu(_ *model.App, _ int) model.Menu {
 
 func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 	return func(main *model.Main) bool {
+		// mock request
 		time.Sleep(time.Millisecond * 200)
 		return true
 	}

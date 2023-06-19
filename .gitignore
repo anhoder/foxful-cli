@@ -1,4 +1,7 @@
 .idea/
+*.iml
+out
+gen
 .DS_Store
 .vscode/
 go.sum
