@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anhoder/foxful-cli/constants"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/termenv"
@@ -41,7 +40,7 @@ func initPrimaryColor() {
 	if _primaryColorStr != "" && _primaryColor != nil {
 		return
 	}
-	if PrimaryColor == "" || PrimaryColor == constants.RandomColor {
+	if PrimaryColor == "" || PrimaryColor == RandomColor {
 		rand.New(rand.NewSource(time.Now().UnixNano()))
 		_primaryColorStr = strconv.Itoa(rand.Intn(228-17) + 17)
 	} else {

@@ -59,7 +59,7 @@ func (s *StartupPage) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	case tickStartupMsg:
 		if s.loadedDuration >= s.options.LoadingDuration {
 			s.loaded = true
-			return s.nextPage, a.rerenderTrigger(true)
+			return s.nextPage, a.RerenderCmd(true)
 		}
 		s.loadedDuration += s.options.TickDuration
 		s.loadedPercent = float64(s.loadedDuration) / float64(s.options.LoadingDuration)

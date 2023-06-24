@@ -117,6 +117,61 @@ func (e *DefaultMenu) TopOutHook() Hook {
 	return nil
 }
 
-type Timer interface {
+type Closer interface {
+	Close() error
+}
+
+type Ticker interface {
+	Closer
+	Start() error
+	Ticker() <-chan time.Time
 	PassedTime() time.Duration
+}
+
+type defaultTicker struct {
+	startTime time.Time
+	t         time.Time
+	ticker    *time.Ticker
+	stop      chan struct{}
+	pipeline  chan time.Time
+}
+
+func DefaultTicker(duration time.Duration) Ticker {
+	return &defaultTicker{
+		ticker:   time.NewTicker(duration),
+		stop:     make(chan struct{}),
+		pipeline: make(chan time.Time),
+	}
+}
+
+func (d *defaultTicker) Start() error {
+	d.startTime = time.Now()
+	go func() {
+		for {
+			select {
+			case <-d.stop:
+				break
+			case d.t = <-d.ticker.C:
+				select {
+				case d.pipeline <- d.t:
+				default:
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+func (d *defaultTicker) Ticker() <-chan time.Time {
+	return d.pipeline
+}
+
+func (d *defaultTicker) PassedTime() time.Duration {
+	return d.t.Sub(d.startTime)
+}
+
+func (d *defaultTicker) Close() error {
+	close(d.stop)
+	d.ticker.Stop()
+	return nil
 }

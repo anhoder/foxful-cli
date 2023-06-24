@@ -3,7 +3,6 @@ package model
 import (
 	"time"
 
-	"github.com/anhoder/foxful-cli/constants"
 	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -12,18 +11,18 @@ type Options struct {
 	StartupOptions
 	util.ProgressOptions
 
-	InitPage            InitPage
 	AppName             string
 	WhetherDisplayTitle bool
 	LoadingText         string
 	PrimaryColor        string
-	MainMenu            Menu        // Entry menu of app
-	DualColumn          bool        // The menu list is displayed as a dual column
-	Components          []Component // Custom Extra components
+	DualColumn          bool // The menu list is displayed as a dual column
 	HideMenu            bool
 
-	ProgramOptions []tea.ProgramOption // Tea program options
-	ScrollTimer    Timer               // Timer for subtitle scrolling display
+	InitPage   InitPage
+	MainMenu   Menu                // Entry menu of app
+	TeaOptions []tea.ProgramOption // Tea program options
+	Ticker     Ticker              // Ticker for render
+	Components []Component         // Custom Extra components
 
 	InitHook  func(a *App)
 	CloseHook func(a *App)
@@ -46,7 +45,7 @@ func DefaultOptions() *Options {
 			LoadingDuration:   time.Second * 2,
 			TickDuration:      time.Millisecond * 16,
 			ProgressOutBounce: true,
-			Welcome:           constants.PkgName,
+			Welcome:           util.PkgName,
 		},
 		ProgressOptions: util.ProgressOptions{
 			FirstEmptyChar: '.',
@@ -58,9 +57,9 @@ func DefaultOptions() *Options {
 		},
 		WhetherDisplayTitle: true,
 		DualColumn:          true,
-		AppName:             constants.PkgName,
-		LoadingText:         constants.LoadingText,
-		PrimaryColor:        constants.RandomColor,
+		AppName:             util.PkgName,
+		LoadingText:         util.LoadingText,
+		PrimaryColor:        util.RandomColor,
 		MainMenu:            &DefaultMenu{},
 	}
 }

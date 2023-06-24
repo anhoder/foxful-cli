@@ -138,7 +138,7 @@ func (main *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 			}
 			component.Update(msg, a)
 		}
-		return main, a.rerenderTrigger(true)
+		return main, a.RerenderCmd(true)
 	}
 
 	return main, nil
@@ -181,7 +181,9 @@ func (main *Main) View(a *App) string {
 		if component == nil {
 			continue
 		}
-		builder.WriteString(component.View(a, main, &top))
+		var view, lines = component.View(a, main)
+		builder.WriteString(view)
+		top += lines
 	}
 
 	if top < windowHeight {
@@ -405,8 +407,8 @@ func (main *Main) menuItemView(a *App, index int) (string, int) {
 		var r = []rune(main.menuList[index].Subtitle)
 		r = append(r, []rune("   ")...)
 		var i int
-		if main.options.ScrollTimer != nil {
-			i = int(main.options.ScrollTimer.PassedTime().Milliseconds()/500) % len(r)
+		if main.options.Ticker != nil {
+			i = int(main.options.Ticker.PassedTime().Milliseconds()/500) % len(r)
 		}
 		var s = make([]rune, 0, itemMaxLen-menuTitleLen)
 		for j := i; j < i+itemMaxLen-menuTitleLen; j++ {
@@ -498,10 +500,10 @@ func (main *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			main.inSearching = false
 			main.searchInput.Blur()
 			main.searchInput.Reset()
-			return main, a.rerenderTrigger(true)
+			return main, a.RerenderCmd(true)
 		case "enter":
 			main.searchMenuHandle()
-			return main, a.rerenderTrigger(true)
+			return main, a.RerenderCmd(true)
 		}
 
 		var cmd tea.Cmd
@@ -535,7 +537,7 @@ func (main *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 	case "b", "B", "esc":
 		main.backMenu()
 	case "r", "R":
-		return main, main.app.rerenderTrigger(true)
+		return main, main.app.RerenderCmd(true)
 	case "/", "／":
 		if main.menu.IsSearchable() {
 			main.inSearching = true

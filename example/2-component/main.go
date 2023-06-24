@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	mainMenu      = NewMainMenu()
-	secondaryMenu = NewSecondaryMenu()
+	mainMenu = NewMainMenu()
+	subMenu  = NewSubMenu()
 )
 
 type MainMenu struct {
@@ -47,16 +47,16 @@ func (m *MainMenu) SubMenu(_ *model.App, index int) model.Menu {
 	if index >= len(m.menus) {
 		return nil
 	}
-	return secondaryMenu
+	return subMenu
 }
 
-type SecondaryMenu struct {
+type SubMenu struct {
 	model.DefaultMenu
 	menus []model.MenuItem
 }
 
-func NewSecondaryMenu() *SecondaryMenu {
-	m := &SecondaryMenu{}
+func NewSubMenu() *SubMenu {
+	m := &SubMenu{}
 	m.menus = []model.MenuItem{
 		{Title: "Sub Menu 1"},
 		{Title: "Sub Menu 2"},
@@ -66,19 +66,19 @@ func NewSecondaryMenu() *SecondaryMenu {
 	return m
 }
 
-func (m *SecondaryMenu) GetMenuKey() string {
+func (m *SubMenu) GetMenuKey() string {
 	return "sub_menu"
 }
 
-func (m *SecondaryMenu) MenuViews() []model.MenuItem {
+func (m *SubMenu) MenuViews() []model.MenuItem {
 	return m.menus
 }
 
-func (m *SecondaryMenu) SubMenu(_ *model.App, _ int) model.Menu {
+func (m *SubMenu) SubMenu(_ *model.App, _ int) model.Menu {
 	return nil
 }
 
-func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
+func (m *SubMenu) BeforeEnterMenuHook() model.Hook {
 	return func(main *model.Main) bool {
 		time.Sleep(time.Millisecond * 200)
 		return true
@@ -86,21 +86,13 @@ func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 }
 
 type Component1 struct {
-	app       *model.App
-	startTime time.Time
-	t         time.Time
+	app *model.App
 }
 
 func NewComponent1(app *model.App) *Component1 {
 	p := &Component1{
 		app: app,
 	}
-	go func() {
-		p.startTime = time.Now()
-		for p.t = range time.Tick(time.Millisecond * 200) {
-			app.Rerender(false)
-		}
-	}()
 
 	return p
 }
@@ -109,32 +101,30 @@ func (p *Component1) Update(_ tea.Msg, _ *model.App) {
 	return
 }
 
-func (p *Component1) View(_ *model.App, main *model.Main, top *int) string {
-	var builder strings.Builder
+func (p *Component1) View(_ *model.App, main *model.Main) (string, int) {
+	var (
+		builder strings.Builder
+		t       = time.Now()
+	)
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle(strconv.Itoa(p.t.Hour())+"h line1\n", termenv.ANSIBrightBlue))
+	builder.WriteString(util.SetFgStyle("line1: "+strconv.Itoa(t.Hour())+"h\n", termenv.ANSIBrightBlue))
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle(strconv.Itoa(p.t.Minute())+"m line2\n", termenv.ANSIBrightCyan))
+	builder.WriteString(util.SetFgStyle("line2: "+strconv.Itoa(t.Minute())+"m\n", termenv.ANSIBrightCyan))
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle(strconv.Itoa(p.t.Second())+"s line3", termenv.ANSIBrightYellow))
+	builder.WriteString(util.SetFgStyle("line3: "+strconv.Itoa(t.Second())+"s", termenv.ANSIBrightYellow))
 
-	*top += 3
-	return builder.String()
-}
-
-func (p *Component1) PassedTime() time.Duration {
-	return p.t.Sub(p.startTime)
+	return builder.String(), 3
 }
 
 func main() {
 	var (
-		ops      = model.DefaultOptions()
-		app      = model.NewApp(ops)
-		progress = NewComponent1(app)
+		ops       = model.DefaultOptions()
+		app       = model.NewApp(ops)
+		component = NewComponent1(app)
 	)
 	ops.MainMenu = mainMenu
-	ops.Components = []model.Component{progress}
-	ops.ScrollTimer = progress
+	ops.Components = []model.Component{component}
+	ops.Ticker = model.DefaultTicker(time.Millisecond * 500)
 
 	fmt.Println(app.Run())
 }

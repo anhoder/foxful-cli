@@ -1,7 +1,6 @@
 package model
 
 import (
-	"io"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,6 +45,16 @@ func (a *App) Init() tea.Cmd {
 	if a.options.InitHook != nil {
 		a.options.InitHook(a)
 	}
+	if a.options.Ticker != nil {
+		go func() {
+			for range a.options.Ticker.Ticker() {
+				a.Rerender(false)
+			}
+		}()
+		if err := a.options.Ticker.Start(); err != nil {
+			panic("Fail to start ticker: " + err.Error())
+		}
+	}
 	if initPage, ok := a.page.(InitPage); ok {
 		return initPage.Init(a)
 	}
@@ -53,11 +62,14 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Close() {
-	if closer, ok := a.page.(io.Closer); ok {
-		_ = closer.Close()
-	}
 	if a.options.CloseHook != nil {
 		a.options.CloseHook(a)
+	}
+	if closer, ok := a.page.(Closer); ok {
+		_ = closer.Close()
+	}
+	if a.options.Ticker != nil {
+		_ = a.options.Ticker.Close()
 	}
 }
 
@@ -95,15 +107,16 @@ func (a *App) View() string {
 func (a *App) Run() error {
 	if a.page == nil {
 		var main = NewMain(a, a.options)
-		if a.options.WhetherDisplayStartup() {
-			a.options.InitPage = NewStartup(&a.options.StartupOptions, main)
-		} else {
-			a.options.InitPage = main
+		if a.options.InitPage == nil {
+			if a.options.WhetherDisplayStartup() {
+				a.options.InitPage = NewStartup(&a.options.StartupOptions, main)
+			} else {
+				a.options.InitPage = main
+			}
 		}
 		a.page = a.options.InitPage
 	}
-
-	a.program = tea.ReplaceWithMusicfoxRenderer(tea.NewProgram(a, a.options.ProgramOptions...))
+	a.program = tea.ReplaceWithFoxfulRenderer(tea.NewProgram(a, a.options.TeaOptions...))
 	_, err := a.program.Run()
 	return err
 }
@@ -112,10 +125,10 @@ func (a *App) Rerender(cleanScreen bool) {
 	if a.program == nil {
 		return
 	}
-	a.program.Send(a.rerenderTrigger(cleanScreen))
+	a.program.Send(a.RerenderCmd(cleanScreen))
 }
 
-func (a *App) rerenderTrigger(cleanScreen bool) tea.Cmd {
+func (a *App) RerenderCmd(cleanScreen bool) tea.Cmd {
 	return func() tea.Msg {
 		if cleanScreen {
 			a.program.Send(tea.ClearScreen())
