@@ -567,21 +567,17 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 
 // mouse handle
 func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
-	switch msg.Type {
-	default:
-		var lastCmd = a.Tick(time.Nanosecond)
-		for _, c := range m.mouseCtrls {
-			stopPropagation, cmd := c.MouseMsgHandle(msg, a)
-			if cmd != nil {
-				lastCmd = cmd
-			}
-			if !stopPropagation {
-				continue
-			}
+	var lastCmd = a.Tick(time.Nanosecond)
+	for _, c := range m.mouseCtrls {
+		stopPropagation, cmd := c.MouseMsgHandle(msg, a)
+		if cmd != nil {
+			lastCmd = cmd
 		}
-		return m, lastCmd
+		if !stopPropagation {
+			continue
+		}
 	}
-	//return m, a.Tick(time.Nanosecond)
+	return m, lastCmd
 }
 
 func (m *Main) searchMenuHandle() {
