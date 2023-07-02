@@ -17,10 +17,9 @@ type InitPage interface {
 	Init(a *App) tea.Cmd
 }
 
-// PageType 显示模型的类型
 type PageType string
 
 const (
-	PtStartup PageType = "startup" // 启动页
-	PtMain    PageType = "main"    // 主页面
+	PtStartup PageType = "startup"
+	PtMain    PageType = "main"
 )

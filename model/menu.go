@@ -30,40 +30,40 @@ func (item *MenuItem) String() string {
 
 // Menu menu interface
 type Menu interface {
-	// IsSearchable 当前菜单是否可搜索
+	// IsSearchable is the current menu searchable
 	IsSearchable() bool
 
-	// RealDataIndex 索引转换
+	// RealDataIndex index of real data
 	RealDataIndex(index int) int
 
-	// GetMenuKey 菜单唯一Key
+	// GetMenuKey Menu unique key
 	GetMenuKey() string
 
-	// MenuViews 获取子菜单View
+	// MenuViews get submenu View
 	MenuViews() []MenuItem
 
-	// FormatMenuItem 进入前的格式化
+	// FormatMenuItem format before entering the menu
 	FormatMenuItem(item *MenuItem)
 
-	// SubMenu 根据下标获取菜单Model
+	// SubMenu obtain menu by index
 	SubMenu(app *App, index int) Menu
 
-	// BeforePrePageHook 切换上一页前的Hook
+	// BeforePrePageHook Hook before turn to previous page
 	BeforePrePageHook() Hook
 
-	// BeforeNextPageHook 切换下一页前的Hook
+	// BeforeNextPageHook Hook before turn to next page
 	BeforeNextPageHook() Hook
 
-	// BeforeEnterMenuHook 进入菜单项前的Hook
+	// BeforeEnterMenuHook Hook before enter menu
 	BeforeEnterMenuHook() Hook
 
-	// BeforeBackMenuHook 菜单返回前的Hook
+	// BeforeBackMenuHook Hook before back menu
 	BeforeBackMenuHook() Hook
 
-	// BottomOutHook 触底的Hook
+	// BottomOutHook Hook while bottom out
 	BottomOutHook() Hook
 
-	// TopOutHook 触顶Hook
+	// TopOutHook Hook while top out
 	TopOutHook() Hook
 }
 

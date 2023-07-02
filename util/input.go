@@ -13,7 +13,7 @@ var (
 	blurredSubmitButton string
 )
 
-const SubmitText = "确认"
+const SubmitText = "Submit"
 
 func GetFocusedPrompt() string {
 	if focusedPrompt != "" {

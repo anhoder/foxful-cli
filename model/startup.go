@@ -111,7 +111,6 @@ func (s *StartupPage) View(a *App) string {
 	return uiBuilder.String()
 }
 
-// get logo
 func (s *StartupPage) logoView(a *App) string {
 	var windowHeight, windowWidth = a.WindowHeight(), a.WindowWidth()
 	if windowWidth <= 0 || windowHeight <= 0 {
@@ -140,7 +139,6 @@ func (s *StartupPage) logoView(a *App) string {
 	return util.SetFgStyle(logoBuilder.String(), util.GetPrimaryColor())
 }
 
-// get tips
 func (s *StartupPage) tipsView(a *App) string {
 	example := "Enter after 11.1 seconds..."
 	var (
@@ -157,7 +155,6 @@ func (s *StartupPage) tipsView(a *App) string {
 	return util.SetFgStyle(tips, termenv.ANSIBrightBlack)
 }
 
-// get progress
 func (s *StartupPage) progressView(a *App) string {
 	var width = float64(a.WindowWidth())
 

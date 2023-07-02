@@ -7,12 +7,12 @@ import (
 )
 
 type ProgressOptions struct {
-	FirstEmptyChar rune // 进度条第一个未加载字符
-	EmptyChar      rune // 进度条未加载字符
-	LastEmptyChar  rune // 进度条最后一个未加载字符
-	FirstFullChar  rune // 进度条第一个已加载字符
-	FullChar       rune // 进度条已加载字符
-	LastFullChar   rune // 进度条最后一个已加载字符
+	FirstEmptyChar rune
+	EmptyChar      rune
+	LastEmptyChar  rune
+	FirstFullChar  rune
+	FullChar       rune
+	LastFullChar   rune
 }
 
 func Progress(options *ProgressOptions, width, fullSize int, progressRamp []string) string {

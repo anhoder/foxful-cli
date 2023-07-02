@@ -3,6 +3,7 @@ package model
 import (
 	"time"
 
+	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 )
@@ -14,8 +15,7 @@ type App struct {
 
 	program *tea.Program
 
-	// 当前页面
-	page Page
+	page Page // current page
 }
 
 // NewApp create application
@@ -105,10 +105,12 @@ func (a *App) View() string {
 }
 
 func (a *App) Run() error {
+	util.PrimaryColor = a.options.PrimaryColor
+
 	if a.page == nil {
 		var main = NewMain(a, a.options)
 		if a.options.InitPage == nil {
-			if a.options.WhetherDisplayStartup() {
+			if a.options.EnableStartup {
 				a.options.InitPage = NewStartup(&a.options.StartupOptions, main)
 			} else {
 				a.options.InitPage = main

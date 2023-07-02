@@ -52,10 +52,17 @@ type Main struct {
 type tickMainMsg struct{}
 
 func NewMain(app *App, options *Options) (m *Main) {
+	var initMenuTitle *MenuItem
+	if options.InitMenuTitle != nil {
+		initMenuTitle = options.InitMenuTitle
+	} else {
+		initMenuTitle = &MenuItem{Title: options.AppName}
+	}
+
 	m = &Main{
 		app:          app,
 		options:      options,
-		menuTitle:    &MenuItem{Title: options.AppName},
+		menuTitle:    initMenuTitle,
 		menu:         options.MainMenu,
 		menuStack:    &util.Stack{},
 		menuCurPage:  1,

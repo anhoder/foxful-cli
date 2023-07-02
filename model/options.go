@@ -18,30 +18,30 @@ type Options struct {
 	DualColumn          bool // The menu list is displayed as a dual column
 	HideMenu            bool
 
-	InitPage   InitPage
-	MainMenu   Menu                // Entry menu of app
 	TeaOptions []tea.ProgramOption // Tea program options
-	Ticker     Ticker              // Ticker for render
-	Components []Component         // Custom Extra components
+
+	InitPage      InitPage
+	InitMenuTitle *MenuItem
+	Ticker        Ticker      // Ticker for render
+	MainMenu      Menu        // Entry menu of app
+	Components    []Component // Custom Extra components
 
 	InitHook  func(a *App)
 	CloseHook func(a *App)
 }
 
 type StartupOptions struct {
+	EnableStartup     bool
 	LoadingDuration   time.Duration
 	TickDuration      time.Duration
 	ProgressOutBounce bool
 	Welcome           string
 }
 
-func (o *StartupOptions) WhetherDisplayStartup() bool {
-	return o.LoadingDuration > 0
-}
-
 func DefaultOptions() *Options {
 	return &Options{
 		StartupOptions: StartupOptions{
+			EnableStartup:     true,
 			LoadingDuration:   time.Second * 2,
 			TickDuration:      time.Millisecond * 16,
 			ProgressOutBounce: true,

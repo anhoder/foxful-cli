@@ -16,7 +16,6 @@ func NewLoading(m *Main) *Loading {
 	}
 }
 
-// 开始
 func (loading *Loading) start() {
 	termenv.DefaultOutput().MoveCursor(loading.main.menuTitleStartRow, 0)
 
@@ -34,7 +33,6 @@ func (loading *Loading) start() {
 	termenv.DefaultOutput().MoveCursor(0, 0)
 }
 
-// 完成
 func (loading *Loading) complete() {
 	termenv.DefaultOutput().MoveCursor(loading.main.menuTitleStartRow, 0)
 
