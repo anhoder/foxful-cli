@@ -166,5 +166,5 @@ func (s *StartupPage) progressView(a *App) string {
 		progressLastWidth = width
 	}
 
-	return util.Progress(&a.options.ProgressOptions, int(width), int(math.Round(width*s.loadedPercent)), progressRamp)
+	return Progress(&a.options.ProgressOptions, int(width), int(math.Round(width*s.loadedPercent)), progressRamp)
 }

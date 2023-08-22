@@ -79,7 +79,7 @@ func (m *SubMenu) SubMenu(_ *model.App, _ int) model.Menu {
 }
 
 func (m *SubMenu) BeforeEnterMenuHook() model.Hook {
-	return func(main *model.Main) bool {
+	return func(_ *model.Main) bool {
 		time.Sleep(time.Millisecond * 200)
 		return true
 	}
@@ -98,7 +98,6 @@ func NewComponent1(app *model.App) *Component1 {
 }
 
 func (p *Component1) Update(_ tea.Msg, _ *model.App) {
-	return
 }
 
 func (p *Component1) View(_ *model.App, main *model.Main) (string, int) {

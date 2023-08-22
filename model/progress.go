@@ -1,8 +1,9 @@
-package util
+package model
 
 import (
 	"strings"
 
+	"github.com/anhoder/foxful-cli/util"
 	"github.com/muesli/termenv"
 )
 
@@ -19,11 +20,11 @@ func Progress(options *ProgressOptions, width, fullSize int, progressRamp []stri
 	var fullCells strings.Builder
 	for i := 0; i < fullSize && i < len(progressRamp); i++ {
 		if i == 0 {
-			fullCells.WriteString(termenv.String(string(options.FirstFullChar)).Foreground(TermProfile.Color(progressRamp[i])).String())
+			fullCells.WriteString(termenv.String(string(options.FirstFullChar)).Foreground(util.TermProfile.Color(progressRamp[i])).String())
 		} else if i >= width-1 {
-			fullCells.WriteString(termenv.String(string(options.LastFullChar)).Foreground(TermProfile.Color(progressRamp[i])).String())
+			fullCells.WriteString(termenv.String(string(options.LastFullChar)).Foreground(util.TermProfile.Color(progressRamp[i])).String())
 		} else {
-			fullCells.WriteString(termenv.String(string(options.FullChar)).Foreground(TermProfile.Color(progressRamp[i])).String())
+			fullCells.WriteString(termenv.String(string(options.FullChar)).Foreground(util.TermProfile.Color(progressRamp[i])).String())
 		}
 	}
 
@@ -44,5 +45,5 @@ func Progress(options *ProgressOptions, width, fullSize int, progressRamp []stri
 			emptyCells.WriteRune(options.LastEmptyChar)
 		}
 	}
-	return fullCells.String() + SetFgStyle(emptyCells.String(), termenv.ANSIBrightBlack)
+	return fullCells.String() + util.SetFgStyle(emptyCells.String(), termenv.ANSIBrightBlack)
 }

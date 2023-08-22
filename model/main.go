@@ -562,8 +562,8 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			if cmd != nil {
 				lastCmd = cmd
 			}
-			if !stopPropagation {
-				continue
+			if stopPropagation {
+				break
 			}
 		}
 		return m, lastCmd
@@ -580,8 +580,8 @@ func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
 		if cmd != nil {
 			lastCmd = cmd
 		}
-		if !stopPropagation {
-			continue
+		if stopPropagation {
+			break
 		}
 	}
 	return m, lastCmd

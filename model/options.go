@@ -9,7 +9,7 @@ import (
 
 type Options struct {
 	StartupOptions
-	util.ProgressOptions
+	ProgressOptions
 
 	AppName             string
 	WhetherDisplayTitle bool
@@ -47,7 +47,7 @@ func DefaultOptions() *Options {
 			ProgressOutBounce: true,
 			Welcome:           util.PkgName,
 		},
-		ProgressOptions: util.ProgressOptions{
+		ProgressOptions: ProgressOptions{
 			FirstEmptyChar: '.',
 			EmptyChar:      '.',
 			LastEmptyChar:  '.',
