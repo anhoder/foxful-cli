@@ -110,10 +110,9 @@ func (a *App) Run() error {
 	if a.page == nil {
 		var main = NewMain(a, a.options)
 		if a.options.InitPage == nil {
+			a.options.InitPage = main
 			if a.options.EnableStartup {
 				a.options.InitPage = NewStartup(&a.options.StartupOptions, main)
-			} else {
-				a.options.InitPage = main
 			}
 		}
 		a.page = a.options.InitPage
