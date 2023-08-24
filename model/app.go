@@ -15,6 +15,9 @@ type App struct {
 
 	program *tea.Program
 
+	startup *StartupPage
+	main    *Main
+
 	page Page // current page
 }
 
@@ -108,11 +111,12 @@ func (a *App) Run() error {
 	util.PrimaryColor = a.options.PrimaryColor
 
 	if a.page == nil {
-		var main = NewMain(a, a.options)
+		a.main = NewMain(a, a.options)
+		a.startup = NewStartup(&a.options.StartupOptions, a.main)
 		if a.options.InitPage == nil {
-			a.options.InitPage = main
+			a.options.InitPage = a.main
 			if a.options.EnableStartup {
-				a.options.InitPage = NewStartup(&a.options.StartupOptions, main)
+				a.options.InitPage = a.startup
 			}
 		}
 		a.page = a.options.InitPage
@@ -150,4 +154,30 @@ func (a *App) WindowWidth() int {
 
 func (a *App) WindowHeight() int {
 	return a.windowHeight
+}
+
+func (a *App) CurPage() Page {
+	return a.page
+}
+
+func (a *App) Startup() *StartupPage {
+	return a.startup
+}
+
+func (a *App) Main() *Main {
+	return a.main
+}
+
+func (a *App) MustMain() *Main {
+	if a.main != nil {
+		return a.main
+	}
+	panic("main page is empty")
+}
+
+func (a *App) MustStartup() *StartupPage {
+	if a.startup != nil {
+		return a.startup
+	}
+	panic("startup page is empty")
 }

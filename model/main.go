@@ -527,13 +527,13 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case "j", "J", "down":
-		m.moveDown()
+		m.MoveDown()
 	case "k", "K", "up":
-		m.moveUp()
+		m.MoveUp()
 	case "h", "H", "left":
-		m.moveLeft()
+		m.MoveLeft()
 	case "l", "L", "right":
-		m.moveRight()
+		m.MoveRight()
 	case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		num, _ := strconv.Atoi(key)
 		start := (m.menuCurPage - 1) * m.menuPageSize
@@ -541,13 +541,13 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			m.selectedIndex = start + num
 		}
 	case "g":
-		m.moveTop()
+		m.MoveTop()
 	case "G":
-		m.moveBottom()
+		m.MoveBottom()
 	case "n", "N", "enter":
-		m.enterMenu(nil, nil)
+		m.EnterMenu(nil, nil)
 	case "b", "B", "esc":
-		m.backMenu()
+		m.BackMenu()
 	case "r", "R":
 		return m, a.RerenderCmd(true)
 	case "/", "／":
@@ -589,7 +589,7 @@ func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
 
 func (m *Main) searchMenuHandle() {
 	m.inSearching = false
-	m.enterMenu(NewSearchMenu(m.menu, m.searchInput.Value()), &MenuItem{Title: "搜索结果", Subtitle: m.searchInput.Value()})
+	m.EnterMenu(NewSearchMenu(m.menu, m.searchInput.Value()), &MenuItem{Title: "搜索结果", Subtitle: m.searchInput.Value()})
 	m.searchInput.Blur()
 	m.searchInput.Reset()
 }
@@ -602,8 +602,7 @@ type menuStackItem struct {
 	menu          Menu
 }
 
-// 上移
-func (m *Main) moveUp() {
+func (m *Main) MoveUp() {
 	topHook := m.menu.TopOutHook()
 	if m.doubleColumn {
 		if m.selectedIndex-2 < 0 && topHook != nil {
@@ -638,12 +637,11 @@ func (m *Main) moveUp() {
 		m.selectedIndex--
 	}
 	if m.selectedIndex < (m.menuCurPage-1)*m.menuPageSize {
-		m.prePage()
+		m.PrePage()
 	}
 }
 
-// 下移
-func (m *Main) moveDown() {
+func (m *Main) MoveDown() {
 	bottomHook := m.menu.BottomOutHook()
 	if m.doubleColumn {
 		if m.selectedIndex+2 > len(m.menuList)-1 && bottomHook != nil {
@@ -677,20 +675,18 @@ func (m *Main) moveDown() {
 		m.selectedIndex++
 	}
 	if m.selectedIndex >= m.menuCurPage*m.menuPageSize {
-		m.nextPage()
+		m.NextPage()
 	}
 }
 
-// 左移
-func (m *Main) moveLeft() {
+func (m *Main) MoveLeft() {
 	if !m.doubleColumn || m.selectedIndex%2 == 0 || m.selectedIndex-1 < 0 {
 		return
 	}
 	m.selectedIndex--
 }
 
-// 右移
-func (m *Main) moveRight() {
+func (m *Main) MoveRight() {
 	if !m.doubleColumn || m.selectedIndex%2 != 0 {
 		return
 	}
@@ -710,8 +706,7 @@ func (m *Main) moveRight() {
 	m.selectedIndex++
 }
 
-// 上移到顶部
-func (m *Main) moveTop() {
+func (m *Main) MoveTop() {
 	if m.doubleColumn {
 		m.selectedIndex = m.selectedIndex % 2
 	} else {
@@ -720,8 +715,7 @@ func (m *Main) moveTop() {
 	m.menuCurPage = 1
 }
 
-// 下移到底部
-func (m *Main) moveBottom() {
+func (m *Main) MoveBottom() {
 	if m.doubleColumn && len(m.menuList)%2 == 0 {
 		m.selectedIndex = len(m.menuList) + (m.selectedIndex%2 - 2)
 	} else if m.doubleColumn && m.selectedIndex%2 != 0 {
@@ -735,8 +729,7 @@ func (m *Main) moveBottom() {
 	}
 }
 
-// 切换到上一页
-func (m *Main) prePage() {
+func (m *Main) PrePage() {
 	if prePageHook := m.menu.BeforePrePageHook(); prePageHook != nil {
 		loading := NewLoading(m)
 		loading.start()
@@ -753,8 +746,7 @@ func (m *Main) prePage() {
 	m.menuCurPage--
 }
 
-// 切换到下一页
-func (m *Main) nextPage() {
+func (m *Main) NextPage() {
 	if nextPageHook := m.menu.BeforeNextPageHook(); nextPageHook != nil {
 		loading := NewLoading(m)
 		loading.start()
@@ -771,8 +763,7 @@ func (m *Main) nextPage() {
 	m.menuCurPage++
 }
 
-// 进入菜单
-func (m *Main) enterMenu(newMenu Menu, newTitle *MenuItem) {
+func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) {
 	if (newMenu == nil || newTitle == nil) && m.selectedIndex >= len(m.menuList) {
 		return
 	}
@@ -823,8 +814,7 @@ func (m *Main) enterMenu(newMenu Menu, newTitle *MenuItem) {
 	m.menuCurPage = 1
 }
 
-// 菜单返回
-func (m *Main) backMenu() {
+func (m *Main) BackMenu() {
 
 	if m.menuStack.Len() <= 0 {
 		return
