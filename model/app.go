@@ -44,6 +44,13 @@ func (a *App) With(w ...WithOption) *App {
 	return a
 }
 
+func (a *App) WithHook(init, close func(a *App)) WithOption {
+	return func(opts *Options) {
+		opts.InitHook = init
+		opts.CloseHook = close
+	}
+}
+
 func (a *App) Init() tea.Cmd {
 	if a.options.InitHook != nil {
 		a.options.InitHook(a)
