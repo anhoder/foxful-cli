@@ -7,7 +7,7 @@ import (
 	"github.com/muesli/termenv"
 )
 
-type Hook func(main *Main) bool
+type Hook func(main *Main) (bool, Page)
 
 type MenuItem struct {
 	Title    string
@@ -152,6 +152,7 @@ func (d *defaultTicker) Start() error {
 			case <-d.stop:
 				break
 			case d.t = <-d.ticker.C:
+				// ignore data race at d.t
 				select {
 				case d.pipeline <- d.t:
 				default:
@@ -167,6 +168,7 @@ func (d *defaultTicker) Ticker() <-chan time.Time {
 }
 
 func (d *defaultTicker) PassedTime() time.Duration {
+	// ignore data race at d.t
 	return d.t.Sub(d.startTime)
 }
 

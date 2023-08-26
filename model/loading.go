@@ -25,7 +25,7 @@ func (loading *Loading) start() {
 	} else {
 		subTitle = loading.main.options.LoadingText
 	}
-	fmt.Print(loading.main.menuTitleView(loading.main.app, nil, &MenuItem{
+	fmt.Print(loading.main.MenuTitleView(loading.main.app, nil, &MenuItem{
 		Title:    loading.main.menuTitle.Title,
 		Subtitle: subTitle,
 	}))
@@ -36,7 +36,7 @@ func (loading *Loading) start() {
 func (loading *Loading) complete() {
 	termenv.DefaultOutput().MoveCursor(loading.main.menuTitleStartRow, 0)
 
-	fmt.Print(loading.main.menuTitleView(loading.main.app, nil, &MenuItem{
+	fmt.Print(loading.main.MenuTitleView(loading.main.app, nil, &MenuItem{
 		Title:    loading.main.menuTitle.Title,
 		Subtitle: loading.main.menuTitle.Subtitle,
 	}))

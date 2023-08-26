@@ -30,9 +30,23 @@ func NewMainMenu() *MainMenu {
 		{Title: "Main Menu 3"},
 		{Title: "Main Menu 4"},
 		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1", Subtitle: "Sub Title"},
+		{Title: "Main Menu 2", Subtitle: "very long long long long long long long long long long long long subtitle"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1", Subtitle: "Sub Title"},
+		{Title: "Main Menu 2", Subtitle: "very long long long long long long long long long long long long subtitle"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
 	}
 
 	return m
+}
+
+func (m *MainMenu) IsSearchable() bool {
+	return true
 }
 
 func (m *MainMenu) GetMenuKey() string {
@@ -79,9 +93,9 @@ func (m *SubMenu) SubMenu(_ *model.App, _ int) model.Menu {
 }
 
 func (m *SubMenu) BeforeEnterMenuHook() model.Hook {
-	return func(_ *model.Main) bool {
+	return func(_ *model.Main) (bool, model.Page) {
 		time.Sleep(time.Millisecond * 200)
-		return true
+		return true, nil
 	}
 }
 

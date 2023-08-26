@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sync"
 	"time"
 
 	"github.com/anhoder/foxful-cli/util"
@@ -12,6 +13,7 @@ type App struct {
 	windowWidth  int
 	windowHeight int
 	options      *Options
+	quiting      bool
 
 	program *tea.Program
 
@@ -19,6 +21,9 @@ type App struct {
 	main    *Main
 
 	page Page // current page
+
+	listeningKBEventL    sync.Mutex
+	listeningMouseEventL sync.Mutex
 }
 
 // NewApp create application
@@ -44,10 +49,17 @@ func (a *App) With(w ...WithOption) *App {
 	return a
 }
 
-func (a *App) WithHook(init, close func(a *App)) WithOption {
+func WithHook(init, close func(a *App)) WithOption {
 	return func(opts *Options) {
 		opts.InitHook = init
 		opts.CloseHook = close
+	}
+}
+
+func WithMainMenu(mainMenu Menu, mainMenuTitle *MenuItem) WithOption {
+	return func(opts *Options) {
+		opts.MainMenu = mainMenu
+		opts.MainMenuTitle = mainMenuTitle
 	}
 }
 
@@ -84,6 +96,18 @@ func (a *App) Close() {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tea.KeyMsg); ok {
+		if !a.listeningKBEventL.TryLock() {
+			return a, nil
+		}
+		defer a.listeningKBEventL.Unlock()
+	} else if _, ok := msg.(tea.MouseMsg); ok {
+		if !a.listeningMouseEventL.TryLock() {
+			return a, nil
+		}
+		defer a.listeningMouseEventL.Unlock()
+	}
+
 	// Make sure these keys always quit
 	switch msgWithType := msg.(type) {
 	case tea.KeyMsg:
@@ -95,6 +119,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		a.Close()
+		a.quiting = true
 		return a, tea.Quit
 	case tea.WindowSizeMsg:
 		a.windowHeight = msgWithType.Height
@@ -107,7 +132,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) View() string {
-	if a.WindowHeight() <= 0 || a.WindowWidth() <= 0 {
+	if a.quiting || a.WindowHeight() <= 0 || a.WindowWidth() <= 0 {
 		return ""
 	}
 
@@ -187,4 +212,8 @@ func (a *App) MustStartup() *StartupPage {
 		return a.startup
 	}
 	panic("startup page is empty")
+}
+
+func (a *App) Options() *Options {
+	return a.options
 }

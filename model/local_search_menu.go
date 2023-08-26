@@ -1,32 +1,30 @@
 package model
 
 import (
-	"strings"
+	"github.com/sahilm/fuzzy"
 )
 
-type searchRes struct {
-	item  MenuItem
-	index int
+type searchableMenus []MenuItem
+
+func (m searchableMenus) String(i int) string {
+	return m[i].OriginString()
+}
+
+func (m searchableMenus) Len() int {
+	return len(m)
 }
 
 type LocalSearchMenu struct {
 	Menu
-	resItems []searchRes
+	resItems fuzzy.Matches
 }
 
 func NewSearchMenu(originMenu Menu, search string) *LocalSearchMenu {
 	menu := &LocalSearchMenu{
-		Menu: originMenu,
+		Menu:     originMenu,
+		resItems: fuzzy.FindFrom(search, searchableMenus(originMenu.MenuViews())),
 	}
 
-	for i, item := range originMenu.MenuViews() {
-		if strings.Contains(item.Title, search) || strings.Contains(item.Subtitle, search) {
-			menu.resItems = append(menu.resItems, searchRes{
-				item:  item,
-				index: i,
-			})
-		}
-	}
 	return menu
 }
 
@@ -35,9 +33,21 @@ func (m *LocalSearchMenu) IsLocatable() bool {
 }
 
 func (m *LocalSearchMenu) MenuViews() []MenuItem {
-	var items []MenuItem
-	for _, item := range m.resItems {
-		items = append(items, item.item)
+	var (
+		items []MenuItem
+		menus = m.Menu.MenuViews()
+	)
+	for _, v := range m.resItems {
+		// matchedMap := lo.Associate(v.MatchedIndexes, func(i int) (int, bool) { return i, true })
+		// titleRune := []rune(menu.Title)
+		// for i := 0; i < len(titleRune); i++ {
+		// 	if matchedMap[i] {
+		// 		fmt.Print(fmt.Sprintf(bold, string(match.Str[i])))
+		// 	} else {
+		// 		fmt.Print(string(match.Str[i]))
+		// 	}
+		// }
+		items = append(items, menus[v.Index])
 	}
 	return items
 }
@@ -47,7 +57,7 @@ func (m *LocalSearchMenu) SubMenu(a *App, index int) Menu {
 		return nil
 	}
 
-	return m.Menu.SubMenu(a, m.resItems[index].index)
+	return m.Menu.SubMenu(a, m.resItems[index].Index)
 }
 
 func (m *LocalSearchMenu) RealDataIndex(index int) int {
@@ -55,7 +65,7 @@ func (m *LocalSearchMenu) RealDataIndex(index int) int {
 		return 0
 	}
 
-	return m.resItems[index].index
+	return m.resItems[index].Index
 }
 
 func (m *LocalSearchMenu) BottomOutHook() Hook {

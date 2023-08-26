@@ -20,7 +20,7 @@ type Main struct {
 
 	app *App
 
-	doubleColumn bool
+	isDualColumn bool
 
 	menuTitle            *MenuItem
 	menuTitleStartRow    int
@@ -52,23 +52,25 @@ type Main struct {
 type tickMainMsg struct{}
 
 func NewMain(app *App, options *Options) (m *Main) {
-	var initMenuTitle *MenuItem
-	if options.InitMenuTitle != nil {
-		initMenuTitle = options.InitMenuTitle
+	var mainMenuTitle *MenuItem
+	if options.MainMenuTitle != nil {
+		mainMenuTitle = options.MainMenuTitle
 	} else {
-		initMenuTitle = &MenuItem{Title: options.AppName}
+		mainMenuTitle = &MenuItem{Title: options.AppName}
 	}
 
 	m = &Main{
 		app:          app,
 		options:      options,
-		menuTitle:    initMenuTitle,
+		menuTitle:    mainMenuTitle,
 		menu:         options.MainMenu,
 		menuStack:    &util.Stack{},
 		menuCurPage:  1,
 		menuPageSize: 10,
 		searchInput:  textinput.New(),
 		components:   options.Components,
+		kbCtrls:      options.KBControllers,
+		mouseCtrls:   options.MouseControllers,
 	}
 	m.menuList = m.menu.MenuViews()
 	m.searchInput.Placeholder = " 搜索"
@@ -112,14 +114,14 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	case tickMainMsg:
 		return m, nil
 	case tea.WindowSizeMsg:
-		m.doubleColumn = msg.Width >= 75 && m.options.DualColumn
+		m.isDualColumn = msg.Width >= 75 && m.options.DualColumn
 
 		// 菜单开始行、列
 		m.menuStartRow = msg.Height / 3
 		if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
 			m.menuStartRow--
 		}
-		if m.doubleColumn {
+		if m.isDualColumn {
 			m.menuStartColumn = (msg.Width - 60) / 2
 			m.menuBottomRow = m.menuStartRow + int(math.Ceil(float64(m.menuPageSize)/2)) - 1
 		} else {
@@ -169,14 +171,14 @@ func (m *Main) View(a *App) string {
 
 	// title
 	if m.options.WhetherDisplayTitle {
-		builder.WriteString(m.titleView(a, &top))
+		builder.WriteString(m.TitleView(a, &top))
 	} else {
 		top++
 	}
 
 	if !m.options.HideMenu {
 		// menu title
-		builder.WriteString(m.menuTitleView(a, &top, nil))
+		builder.WriteString(m.MenuTitleView(a, &top, nil))
 
 		// menu list
 		builder.WriteString(m.menuListView(a, &top))
@@ -185,6 +187,12 @@ func (m *Main) View(a *App) string {
 		builder.WriteString(m.searchInputView(a, &top))
 	} else {
 		builder.WriteString("\n\n\n")
+		top += 2
+	}
+
+	// search bar
+	if m.menu.IsSearchable() {
+		builder.WriteString("\n\n")
 		top += 2
 	}
 
@@ -221,8 +229,47 @@ func (m *Main) MenuStartRow() int {
 	return m.menuStartRow
 }
 
-// title view
-func (m *Main) titleView(a *App, top *int) string {
+func (m *Main) SearchBarBottomRow() int {
+	if m.menu.IsSearchable() {
+		return m.menuBottomRow + 2
+	}
+	return m.menuBottomRow
+}
+
+func (m *Main) MenuBottomRow() int {
+	return m.menuBottomRow
+}
+
+func (m *Main) IsDualColumn() bool {
+	return m.isDualColumn
+}
+
+func (m *Main) MenuTitle() *MenuItem {
+	return m.menuTitle
+}
+
+func (m *Main) CurMenu() Menu {
+	return m.menu
+}
+
+func (m *Main) CurPage() int {
+	return m.menuCurPage
+}
+
+func (m *Main) PageSize() int {
+	return m.menuPageSize
+}
+
+func (m *Main) SelectedIndex() int {
+	return m.selectedIndex
+}
+
+func (m *Main) SetSelectedIndex(i int) {
+	m.selectedIndex = i
+}
+
+// TitleView title view
+func (m *Main) TitleView(a *App, top *int) string {
 	var (
 		titleBuilder strings.Builder
 		windowWidth  = a.WindowWidth()
@@ -245,8 +292,8 @@ func (m *Main) titleView(a *App, top *int) string {
 	return util.SetFgStyle(titleBuilder.String(), util.GetPrimaryColor())
 }
 
-// menu title
-func (m *Main) menuTitleView(a *App, top *int, menuTitle *MenuItem) string {
+// MenuTitleView menu title
+func (m *Main) MenuTitleView(a *App, top *int, menuTitle *MenuItem) string {
 	var (
 		menuTitleBuilder strings.Builder
 		title            string
@@ -292,12 +339,15 @@ func (m *Main) menuTitleView(a *App, top *int, menuTitle *MenuItem) string {
 	return menuTitleBuilder.String()
 }
 
-// 菜单列表
+func (m *Main) MenuList() []MenuItem {
+	return m.menuList
+}
+
 func (m *Main) menuListView(a *App, top *int) string {
 	var menuListBuilder strings.Builder
 	menus := m.getCurPageMenus()
 	var lines, maxLines int
-	if m.doubleColumn {
+	if m.isDualColumn {
 		lines = int(math.Ceil(float64(len(menus)) / 2))
 		maxLines = int(math.Ceil(float64(m.menuPageSize) / 2))
 	} else {
@@ -330,14 +380,13 @@ func (m *Main) menuListView(a *App, top *int) string {
 	return menuListBuilder.String()
 }
 
-// 菜单Line
 func (m *Main) menuLineView(a *App, line int) string {
 	var (
 		menuLineBuilder strings.Builder
 		index           int
 		windowWidth     = a.WindowWidth()
 	)
-	if m.doubleColumn {
+	if m.isDualColumn {
 		index = line*2 + (m.menuCurPage-1)*m.menuPageSize
 	} else {
 		index = line + (m.menuCurPage-1)*m.menuPageSize
@@ -350,7 +399,7 @@ func (m *Main) menuLineView(a *App, line int) string {
 	}
 	menuItemStr, menuItemLen := m.menuItemView(a, index)
 	menuLineBuilder.WriteString(menuItemStr)
-	if m.doubleColumn {
+	if m.isDualColumn {
 		var secondMenuItemLen int
 		if index < len(m.menuList)-1 {
 			var secondMenuItemStr string
@@ -368,7 +417,6 @@ func (m *Main) menuLineView(a *App, line int) string {
 	return menuLineBuilder.String()
 }
 
-// 菜单Item
 func (m *Main) menuItemView(a *App, index int) (string, int) {
 	var (
 		menuItemBuilder strings.Builder
@@ -389,7 +437,7 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 		menuTitle += " "
 	}
 
-	if m.doubleColumn {
+	if m.isDualColumn {
 		if windowWidth <= 88 {
 			itemMaxLen = (windowWidth - m.menuStartColumn - 4) / 2
 		} else {
@@ -447,7 +495,6 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 	return menuItemBuilder.String(), itemMaxLen
 }
 
-// 菜单搜索
 func (m *Main) searchInputView(app *App, top *int) string {
 	if !m.inSearching {
 		*top++
@@ -496,7 +543,6 @@ func (m *Main) searchInputView(app *App, top *int) string {
 	return builder.String()
 }
 
-// 获取当前页的菜单
 func (m *Main) getCurPageMenus() []MenuItem {
 	start := (m.menuCurPage - 1) * m.menuPageSize
 	end := int(math.Min(float64(len(m.menuList)), float64(m.menuCurPage*m.menuPageSize)))
@@ -517,23 +563,39 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			m.searchMenuHandle()
 			return m, a.RerenderCmd(true)
 		}
-
 		var cmd tea.Cmd
 		m.searchInput, cmd = m.searchInput.Update(msg)
-
 		return m, tea.Batch(cmd)
 	}
 
-	key := msg.String()
+	var (
+		key             = msg.String()
+		newPage         Page
+		lastCmd         tea.Cmd
+		stopPropagation bool
+	)
+	for _, c := range m.kbCtrls {
+		stopPropagation, newPage, lastCmd = c.KeyMsgHandle(msg, a)
+		if stopPropagation {
+			if newPage != nil {
+				return newPage, func() tea.Msg { return newPage.Msg() }
+			}
+			if lastCmd == nil {
+				lastCmd = a.Tick(time.Nanosecond)
+			}
+			return m, lastCmd
+		}
+	}
+
 	switch key {
 	case "j", "J", "down":
-		m.MoveDown()
+		newPage = m.MoveDown()
 	case "k", "K", "up":
-		m.MoveUp()
+		newPage = m.MoveUp()
 	case "h", "H", "left":
-		m.MoveLeft()
+		newPage = m.MoveLeft()
 	case "l", "L", "right":
-		m.MoveRight()
+		newPage = m.MoveRight()
 	case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		num, _ := strconv.Atoi(key)
 		start := (m.menuCurPage - 1) * m.menuPageSize
@@ -541,13 +603,13 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			m.selectedIndex = start + num
 		}
 	case "g":
-		m.MoveTop()
+		newPage = m.MoveTop()
 	case "G":
-		m.MoveBottom()
+		newPage = m.MoveBottom()
 	case "n", "N", "enter":
-		m.EnterMenu(nil, nil)
+		newPage = m.EnterMenu(nil, nil)
 	case "b", "B", "esc":
-		m.BackMenu()
+		newPage = m.BackMenu()
 	case "r", "R":
 		return m, a.RerenderCmd(true)
 	case "/", "／":
@@ -555,34 +617,32 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 			m.inSearching = true
 			m.searchInput.Focus()
 		}
-	default:
-		var lastCmd = a.Tick(time.Nanosecond)
-		for _, c := range m.kbCtrls {
-			stopPropagation, cmd := c.KeyMsgHandle(msg, a)
-			if cmd != nil {
-				lastCmd = cmd
-			}
-			if stopPropagation {
-				break
-			}
-		}
-		return m, lastCmd
 	}
 
+	if newPage != nil {
+		return newPage, func() tea.Msg { return newPage.Msg() }
+	}
 	return m, a.Tick(time.Nanosecond)
 }
 
 // mouse handle
 func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
-	var lastCmd = a.Tick(time.Nanosecond)
+	var (
+		newPage         Page
+		lastCmd         tea.Cmd
+		stopPropagation bool
+	)
 	for _, c := range m.mouseCtrls {
-		stopPropagation, cmd := c.MouseMsgHandle(msg, a)
-		if cmd != nil {
-			lastCmd = cmd
-		}
+		stopPropagation, newPage, lastCmd = c.MouseMsgHandle(msg, a)
 		if stopPropagation {
 			break
 		}
+	}
+	if newPage != nil {
+		return newPage, func() tea.Msg { return newPage.Msg() }
+	}
+	if lastCmd == nil {
+		lastCmd = a.Tick(time.Nanosecond)
 	}
 	return m, lastCmd
 }
@@ -602,170 +662,197 @@ type menuStackItem struct {
 	menu          Menu
 }
 
-func (m *Main) MoveUp() {
-	topHook := m.menu.TopOutHook()
-	if m.doubleColumn {
+func (m *Main) MoveUp() Page {
+	var (
+		topHook = m.menu.TopOutHook()
+		newPage Page
+		res     bool
+	)
+	if m.isDualColumn {
 		if m.selectedIndex-2 < 0 && topHook != nil {
 			loading := NewLoading(m)
 			loading.start()
-			if res := topHook(m); !res {
+			if res, newPage = topHook(m); !res {
 				loading.complete()
-				return
+				return newPage
 			}
-			// 更新菜单UI
+			// update menu ui
 			m.menuList = m.menu.MenuViews()
 			loading.complete()
 		}
 		if m.selectedIndex-2 < 0 {
-			return
+			return nil
 		}
 		m.selectedIndex -= 2
 	} else {
 		if m.selectedIndex-1 < 0 && topHook != nil {
 			loading := NewLoading(m)
 			loading.start()
-			if res := topHook(m); !res {
+			if res, newPage = topHook(m); !res {
 				loading.complete()
-				return
+				return newPage
 			}
 			m.menuList = m.menu.MenuViews()
 			loading.complete()
 		}
 		if m.selectedIndex-1 < 0 {
-			return
+			return nil
 		}
 		m.selectedIndex--
 	}
 	if m.selectedIndex < (m.menuCurPage-1)*m.menuPageSize {
-		m.PrePage()
+		newPage = m.PrePage()
 	}
+	return newPage
 }
 
-func (m *Main) MoveDown() {
-	bottomHook := m.menu.BottomOutHook()
-	if m.doubleColumn {
+func (m *Main) MoveDown() Page {
+	var (
+		bottomHook = m.menu.BottomOutHook()
+		newPage    Page
+		res        bool
+	)
+	if m.isDualColumn {
 		if m.selectedIndex+2 > len(m.menuList)-1 && bottomHook != nil {
 			loading := NewLoading(m)
 			loading.start()
-			if res := bottomHook(m); !res {
+			if res, newPage = bottomHook(m); !res {
 				loading.complete()
-				return
+				return newPage
 			}
 			m.menuList = m.menu.MenuViews()
 			loading.complete()
 		}
 		if m.selectedIndex+2 > len(m.menuList)-1 {
-			return
+			return nil
 		}
 		m.selectedIndex += 2
 	} else {
 		if m.selectedIndex+1 > len(m.menuList)-1 && bottomHook != nil {
 			loading := NewLoading(m)
 			loading.start()
-			if res := bottomHook(m); !res {
+			if res, newPage = bottomHook(m); !res {
 				loading.complete()
-				return
+				return newPage
 			}
 			m.menuList = m.menu.MenuViews()
 			loading.complete()
 		}
 		if m.selectedIndex+1 > len(m.menuList)-1 {
-			return
+			return nil
 		}
 		m.selectedIndex++
 	}
 	if m.selectedIndex >= m.menuCurPage*m.menuPageSize {
-		m.NextPage()
+		newPage = m.NextPage()
 	}
+	return newPage
 }
 
-func (m *Main) MoveLeft() {
-	if !m.doubleColumn || m.selectedIndex%2 == 0 || m.selectedIndex-1 < 0 {
-		return
+func (m *Main) MoveLeft() Page {
+	if !m.isDualColumn || m.selectedIndex%2 == 0 || m.selectedIndex-1 < 0 {
+		return nil
 	}
 	m.selectedIndex--
+	return nil
 }
 
-func (m *Main) MoveRight() {
-	if !m.doubleColumn || m.selectedIndex%2 != 0 {
-		return
+func (m *Main) MoveRight() Page {
+	if !m.isDualColumn || m.selectedIndex%2 != 0 {
+		return nil
 	}
+	var (
+		newPage Page
+		res     bool
+	)
 	if bottomHook := m.menu.BottomOutHook(); m.selectedIndex >= len(m.menuList)-1 && bottomHook != nil {
 		loading := NewLoading(m)
 		loading.start()
-		if res := bottomHook(m); !res {
+		if res, newPage = bottomHook(m); !res {
 			loading.complete()
-			return
+			return newPage
 		}
 		m.menuList = m.menu.MenuViews()
 		loading.complete()
 	}
 	if m.selectedIndex >= len(m.menuList)-1 {
-		return
+		return nil
 	}
 	m.selectedIndex++
+	return newPage
 }
 
-func (m *Main) MoveTop() {
-	if m.doubleColumn {
+func (m *Main) MoveTop() Page {
+	if m.isDualColumn {
 		m.selectedIndex = m.selectedIndex % 2
 	} else {
 		m.selectedIndex = 0
 	}
 	m.menuCurPage = 1
+	return nil
 }
 
-func (m *Main) MoveBottom() {
-	if m.doubleColumn && len(m.menuList)%2 == 0 {
+func (m *Main) MoveBottom() Page {
+	if m.isDualColumn && len(m.menuList)%2 == 0 {
 		m.selectedIndex = len(m.menuList) + (m.selectedIndex%2 - 2)
-	} else if m.doubleColumn && m.selectedIndex%2 != 0 {
+	} else if m.isDualColumn && m.selectedIndex%2 != 0 {
 		m.selectedIndex = len(m.menuList) - 2
 	} else {
 		m.selectedIndex = len(m.menuList) - 1
 	}
 	m.menuCurPage = int(math.Ceil(float64(len(m.menuList)) / float64(m.menuPageSize)))
-	if m.doubleColumn && m.selectedIndex%2 != 0 && len(m.menuList)%m.menuPageSize == 1 {
+	if m.isDualColumn && m.selectedIndex%2 != 0 && len(m.menuList)%m.menuPageSize == 1 {
 		m.menuCurPage -= 1
 	}
+	return nil
 }
 
-func (m *Main) PrePage() {
+func (m *Main) PrePage() Page {
+	var (
+		newPage Page
+		res     bool
+	)
 	if prePageHook := m.menu.BeforePrePageHook(); prePageHook != nil {
 		loading := NewLoading(m)
 		loading.start()
-		if res := prePageHook(m); !res {
+		if res, newPage = prePageHook(m); !res {
 			loading.complete()
-			return
+			return newPage
 		}
 		loading.complete()
 	}
-
 	if m.menuCurPage <= 1 {
-		return
+		return nil
 	}
 	m.menuCurPage--
+	return newPage
 }
 
-func (m *Main) NextPage() {
+func (m *Main) NextPage() Page {
+	var (
+		res     bool
+		newPage Page
+	)
 	if nextPageHook := m.menu.BeforeNextPageHook(); nextPageHook != nil {
 		loading := NewLoading(m)
 		loading.start()
-		if res := nextPageHook(m); !res {
+		if res, newPage = nextPageHook(m); !res {
 			loading.complete()
-			return
+			return newPage
 		}
 		loading.complete()
 	}
 	if m.menuCurPage >= int(math.Ceil(float64(len(m.menuList))/float64(m.menuPageSize))) {
-		return
+		return nil
 	}
 
 	m.menuCurPage++
+	return newPage
 }
 
-func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) {
+func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) Page {
 	if (newMenu == nil || newTitle == nil) && m.selectedIndex >= len(m.menuList) {
-		return
+		return nil
 	}
 
 	if newMenu == nil {
@@ -786,21 +873,23 @@ func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) {
 
 	if newMenu == nil {
 		m.menuStack.Pop()
-		return
+		return nil
 	}
 
+	var (
+		res     bool
+		newPage Page
+	)
 	if enterMenuHook := newMenu.BeforeEnterMenuHook(); enterMenuHook != nil {
 		loading := NewLoading(m)
 		loading.start()
-		if res := enterMenuHook(m); !res {
+		if res, newPage = enterMenuHook(m); !res {
 			loading.complete()
 			m.menuStack.Pop() // 压入的重新弹出
-			return
+			return newPage
 		}
-
 		loading.complete()
 	}
-
 	if newMenu != nil {
 		newMenu.FormatMenuItem(newTitle)
 	}
@@ -812,22 +901,27 @@ func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) {
 	m.menuTitle = newTitle
 	m.selectedIndex = 0
 	m.menuCurPage = 1
+
+	return newPage
 }
 
-func (m *Main) BackMenu() {
-
+func (m *Main) BackMenu() Page {
 	if m.menuStack.Len() <= 0 {
-		return
+		return nil
 	}
 
-	stackItem := m.menuStack.Pop()
+	var (
+		stackItem = m.menuStack.Pop()
+		newPage   Page
+		res       bool
+	)
 	if backMenuHook := m.menu.BeforeBackMenuHook(); backMenuHook != nil {
 		loading := NewLoading(m)
 		loading.start()
-		if res := backMenuHook(m); !res {
+		if res, newPage = backMenuHook(m); !res {
 			loading.complete()
 			m.menuStack.Push(stackItem) // 弹出的重新压入
-			return
+			return newPage
 		}
 		loading.complete()
 	}
@@ -835,7 +929,7 @@ func (m *Main) BackMenu() {
 
 	stackMenu, ok := stackItem.(*menuStackItem)
 	if !ok {
-		return
+		return nil
 	}
 
 	m.menuList = stackMenu.menuList
@@ -844,4 +938,12 @@ func (m *Main) BackMenu() {
 	m.menu.FormatMenuItem(m.menuTitle)
 	m.selectedIndex = stackMenu.selectedIndex
 	m.menuCurPage = stackMenu.menuCurPage
+
+	return newPage
+}
+
+func TickMain(duration time.Duration) tea.Cmd {
+	return tea.Tick(duration, func(time.Time) tea.Msg {
+		return tickMainMsg{}
+	})
 }

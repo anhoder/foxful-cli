@@ -20,6 +20,13 @@ var (
 	progressEndColor   string
 )
 
+func GetProgressColor() (start, end string) {
+	if progressStartColor == "" || progressEndColor == "" {
+		progressStartColor, progressEndColor = util.GetRandomRgbColor(true)
+	}
+	return progressStartColor, progressEndColor
+}
+
 type tickStartupMsg struct{}
 
 type StartupPage struct {
@@ -158,11 +165,9 @@ func (s *StartupPage) tipsView(a *App) string {
 func (s *StartupPage) progressView(a *App) string {
 	var width = float64(a.WindowWidth())
 
-	if progressStartColor == "" || progressEndColor == "" {
-		progressStartColor, progressEndColor = util.GetRandomRgbColor(true)
-	}
+	start, end := GetProgressColor()
 	if width != progressLastWidth {
-		progressRamp = util.MakeRamp(progressStartColor, progressEndColor, width)
+		progressRamp = util.MakeRamp(start, end, width)
 		progressLastWidth = width
 	}
 

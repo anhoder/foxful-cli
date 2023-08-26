@@ -21,10 +21,13 @@ type Options struct {
 	TeaOptions []tea.ProgramOption // Tea program options
 
 	InitPage      InitPage
-	InitMenuTitle *MenuItem
+	MainMenuTitle *MenuItem
 	Ticker        Ticker      // Ticker for render
 	MainMenu      Menu        // Entry menu of app
 	Components    []Component // Custom Extra components
+
+	KBControllers    []KeyboardController
+	MouseControllers []MouseController
 
 	InitHook  func(a *App)
 	CloseHook func(a *App)
