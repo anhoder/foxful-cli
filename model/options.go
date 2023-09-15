@@ -5,6 +5,7 @@ import (
 
 	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
+	hook "github.com/robotn/gohook"
 )
 
 type Options struct {
@@ -27,6 +28,7 @@ type Options struct {
 	LocalSearchMenu LocalSearchMenu // Local search result menu
 	Components      []Component     // Custom Extra components
 
+	GlobalKeyMapping map[string]GlobalKeyMapper
 	KBControllers    []KeyboardController
 	MouseControllers []MouseController
 
@@ -65,5 +67,29 @@ func DefaultOptions() *Options {
 		LoadingText:         util.LoadingText,
 		PrimaryColor:        util.RandomColor,
 		MainMenu:            &DefaultMenu{},
+	}
+}
+
+type WithOption func(options *Options)
+
+func WithHook(init, close func(a *App)) WithOption {
+	return func(opts *Options) {
+		opts.InitHook = init
+		opts.CloseHook = close
+	}
+}
+
+func WithMainMenu(mainMenu Menu, mainMenuTitle *MenuItem) WithOption {
+	return func(opts *Options) {
+		opts.MainMenu = mainMenu
+		opts.MainMenuTitle = mainMenuTitle
+	}
+}
+
+type GlobalKeyMapper func(hook.Event) tea.Key
+
+func WithGlobalKeyMappers(m map[string]GlobalKeyMapper) WithOption {
+	return func(options *Options) {
+		options.GlobalKeyMapping = m
 	}
 }

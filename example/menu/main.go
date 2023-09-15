@@ -95,9 +95,7 @@ func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 
 func main() {
 	var app = model.NewApp(model.DefaultOptions())
-	app.With(func(options *model.Options) {
-		options.MainMenu = mainMenu
-	})
+	app.With(model.WithMainMenu(mainMenu, nil))
 
 	fmt.Println(app.Run())
 }
