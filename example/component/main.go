@@ -135,6 +135,14 @@ func main() {
 		app       = model.NewApp(ops)
 		component = NewComponent1(app)
 	)
+	ops.FullChar = ' '
+	ops.FullCharWhenFirst = ' '
+	ops.FullCharWhenLast = ' '
+	ops.EmptyChar = ' '
+	ops.EmptyCharWhenLast = ' '
+	ops.EmptyCharWhenFirst = ' '
+	ops.FirstEmptyChar = '>'
+	ops.LastFullChar = '='
 	ops.MainMenu = mainMenu
 	ops.Components = []model.Component{component}
 	ops.Ticker = model.DefaultTicker(time.Millisecond * 500)
