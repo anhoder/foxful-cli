@@ -140,11 +140,15 @@ func (a *App) Run() error {
 		a.page = a.options.InitPage
 	}
 
-	if len(a.options.GlobalKeyMapping) > 0 {
-		for global, mapper := range a.options.GlobalKeyMapping {
+	if len(a.options.GlobalKeyHandlers) > 0 {
+		for global, handler := range a.options.GlobalKeyHandlers {
 			keys := strings.Split(global, "+")
 			hook.Register(hook.KeyDown, keys, func(e hook.Event) {
-				a.program.Send(tea.KeyMsg(mapper(e)))
+				page := handler(e)
+				if page == nil {
+					page = a.page
+				}
+				a.program.Send(page.Msg())
 			})
 		}
 		s := hook.Start()

@@ -28,9 +28,9 @@ type Options struct {
 	LocalSearchMenu LocalSearchMenu // Local search result menu
 	Components      []Component     // Custom Extra components
 
-	GlobalKeyMapping map[string]GlobalKeyMapper
-	KBControllers    []KeyboardController
-	MouseControllers []MouseController
+	GlobalKeyHandlers map[string]GlobalKeyHandler
+	KBControllers     []KeyboardController
+	MouseControllers  []MouseController
 
 	InitHook  func(a *App)
 	CloseHook func(a *App)
@@ -88,10 +88,10 @@ func WithMainMenu(mainMenu Menu, mainMenuTitle *MenuItem) WithOption {
 	}
 }
 
-type GlobalKeyMapper func(hook.Event) tea.Key
+type GlobalKeyHandler func(hook.Event) Page
 
-func WithGlobalKeyMappers(m map[string]GlobalKeyMapper) WithOption {
+func WithGlobalKeyHandlers(m map[string]GlobalKeyHandler) WithOption {
 	return func(options *Options) {
-		options.GlobalKeyMapping = m
+		options.GlobalKeyHandlers = m
 	}
 }

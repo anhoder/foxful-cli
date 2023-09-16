@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/anhoder/foxful-cli/model"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/robotn/gohook"
 )
 
@@ -96,13 +95,14 @@ func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 }
 
 func main() {
-	var m = map[string]model.GlobalKeyMapper{
-		"ctrl+shift+c": func(event hook.Event) tea.Key {
-			return tea.Key{Type: tea.KeyEnter}
+	var app = model.NewApp(model.DefaultOptions())
+	var m = map[string]model.GlobalKeyHandler{
+		"ctrl+shift+c": func(event hook.Event) model.Page {
+			app.MustMain().EnterMenu(nil, nil)
+			return nil
 		},
 	}
-	var app = model.NewApp(model.DefaultOptions())
-	app.With(model.WithGlobalKeyMappers(m), model.WithMainMenu(mainMenu, nil))
+	app.With(model.WithGlobalKeyHandlers(m), model.WithMainMenu(mainMenu, nil))
 
 	fmt.Println(app.Run())
 }
