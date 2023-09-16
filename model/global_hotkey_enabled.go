@@ -24,7 +24,3 @@ func ListenGlobalKeys(app *App, handlers map[string]GlobalKeyHandler) {
 	s := hook.Start()
 	hook.Process(s)
 }
-
-func StopGlobalListen() {
-	hook.End()
-}

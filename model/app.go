@@ -71,7 +71,6 @@ func (a *App) Close() {
 	if a.options.CloseHook != nil {
 		a.options.CloseHook(a)
 	}
-	StopGlobalListen()
 	if closer, ok := a.page.(Closer); ok {
 		_ = closer.Close()
 	}
