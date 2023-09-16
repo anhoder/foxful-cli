@@ -1,14 +1,12 @@
 package model
 
 import (
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/anhoder/foxful-cli/util"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
-	"github.com/robotn/gohook"
 )
 
 type App struct {
@@ -73,6 +71,7 @@ func (a *App) Close() {
 	if a.options.CloseHook != nil {
 		a.options.CloseHook(a)
 	}
+	StopGlobalListen()
 	if closer, ok := a.page.(Closer); ok {
 		_ = closer.Close()
 	}
@@ -141,18 +140,7 @@ func (a *App) Run() error {
 	}
 
 	if len(a.options.GlobalKeyHandlers) > 0 {
-		for global, handler := range a.options.GlobalKeyHandlers {
-			keys := strings.Split(global, "+")
-			hook.Register(hook.KeyDown, keys, func(e hook.Event) {
-				page := handler(e)
-				if page == nil {
-					page = a.page
-				}
-				a.program.Send(page.Msg())
-			})
-		}
-		s := hook.Start()
-		hook.Process(s)
+		ListenGlobalKeys(a, a.options.GlobalKeyHandlers)
 	}
 
 	a.program = tea.ReplaceWithFoxfulRenderer(tea.NewProgram(a, a.options.TeaOptions...))
