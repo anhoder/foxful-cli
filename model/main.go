@@ -299,7 +299,7 @@ func (m *Main) MenuTitleView(a *App, top *int, menuTitle *MenuItem) string {
 	realString := menuTitle.OriginString()
 	formatString := menuTitle.String()
 	if runewidth.StringWidth(realString) > maxLen {
-		var menuTmp = *menuTitle
+		menuTmp := *menuTitle
 		titleLen := runewidth.StringWidth(menuTmp.Title)
 		subTitleLen := runewidth.StringWidth(menuTmp.Subtitle)
 		if titleLen >= maxLen-1 {
@@ -609,7 +609,7 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 		newPage = m.BackMenu()
 	case "r", "R":
 		return m, a.RerenderCmd(true)
-	case "/", "／":
+	case "/", "／", "、":
 		if m.menu.IsSearchable() {
 			m.inSearching = true
 			m.searchInput.Focus()
