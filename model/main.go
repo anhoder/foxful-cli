@@ -159,7 +159,7 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 }
 
 func (m *Main) View(a *App) string {
-	var windowHeight, windowWidth = a.WindowHeight(), a.WindowWidth()
+	windowHeight, windowWidth := a.WindowHeight(), a.WindowWidth()
 	if windowHeight <= 0 || windowWidth <= 0 {
 		return ""
 	}
@@ -199,7 +199,7 @@ func (m *Main) View(a *App) string {
 		if component == nil {
 			continue
 		}
-		var view, lines = component.View(a, m)
+		view, lines := component.View(a, m)
 		builder.WriteString(view)
 		top += lines
 	}
@@ -359,7 +359,7 @@ func (m *Main) menuListView(a *App, top *int) string {
 
 	// fill blanks
 	if maxLines > lines {
-		var windowWidth = a.WindowWidth()
+		windowWidth := a.WindowWidth()
 		if windowWidth-m.menuStartColumn > 0 {
 			menuListBuilder.WriteString(strings.Repeat(" ", windowWidth-m.menuStartColumn))
 		}
@@ -455,13 +455,13 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 			menuName = util.SetNormalStyle(tmp)
 		}
 	} else if menuTitleLen+menuSubtitleLen > itemMaxLen {
-		var r = []rune(m.menuList[index].Subtitle)
+		r := []rune(m.menuList[index].Subtitle)
 		r = append(r, []rune("   ")...)
 		var i int
 		if m.options.Ticker != nil {
 			i = int(m.options.Ticker.PassedTime().Milliseconds()/500) % len(r)
 		}
-		var s = make([]rune, 0, itemMaxLen-menuTitleLen)
+		s := make([]rune, 0, itemMaxLen-menuTitleLen)
 		for j := i; j < i+itemMaxLen-menuTitleLen; j++ {
 			s = append(s, r[j%len(r)])
 		}
@@ -590,8 +590,14 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 	case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		num, _ := strconv.Atoi(key)
 		start := (m.menuCurPage - 1) * m.menuPageSize
-		if start+num < len(m.menuList) {
-			m.selectedIndex = start + num
+		if start+num >= len(m.menuList) {
+			break
+		}
+		target := start + num
+		if m.selectedIndex == target {
+			newPage = m.EnterMenu(nil, nil)
+		} else {
+			m.selectedIndex = target
 		}
 	case "g":
 		newPage = m.MoveTop()
@@ -640,7 +646,7 @@ func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
 
 func (m *Main) searchMenuHandle() {
 	m.inSearching = false
-	var searchMenu = m.options.LocalSearchMenu
+	searchMenu := m.options.LocalSearchMenu
 	if m.options.LocalSearchMenu == nil {
 		searchMenu = DefaultSearchMenu()
 	}
