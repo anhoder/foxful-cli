@@ -118,9 +118,32 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 
 		// menu start col, row
 		m.menuStartRow = msg.Height / 3
+		// If dynamic row count is on, we want at most 6 rows at the start to give more space to the entries
+		if m.options.DynamicRowCount && m.menuStartRow > 6 {
+			m.menuStartRow = 6
+		}
+
 		if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
 			m.menuStartRow--
 		}
+
+		if m.options.DynamicRowCount {
+			var numColumns = 1
+			if m.isDualColumn {
+				numColumns = 2
+			}
+			// Compute the maximum number of entries per page based on the number of rows remaining.
+			// 11 is the magic number that works best.
+			// 3 lines for search + 5 lines of lyrics + 4 lines of song name and progress bar = 12. Not
+			// sure where the discrepancy comes from.
+			var maxEntries = (msg.Height - m.menuStartRow - 11) * numColumns
+			if maxEntries > 10 {
+				m.menuPageSize = maxEntries
+			} else {
+				m.menuPageSize = 10
+			}
+		}
+
 		if m.isDualColumn {
 			m.menuStartColumn = (msg.Width - 60) / 2
 			m.menuBottomRow = m.menuStartRow + int(math.Ceil(float64(m.menuPageSize)/2)) + 1 // 1 for search bar
