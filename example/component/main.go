@@ -40,6 +40,26 @@ func NewMainMenu() *MainMenu {
 		{Title: "Main Menu 3"},
 		{Title: "Main Menu 4"},
 		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1"},
+		{Title: "Main Menu 2"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1"},
+		{Title: "Main Menu 2"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1"},
+		{Title: "Main Menu 2"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
+		{Title: "Main Menu 1"},
+		{Title: "Main Menu 2"},
+		{Title: "Main Menu 3"},
+		{Title: "Main Menu 4"},
+		{Title: "Main Menu 5"},
 	}
 
 	return m
@@ -135,6 +155,7 @@ func main() {
 		app       = model.NewApp(ops)
 		component = NewComponent1(app)
 	)
+	ops.DynamicRowCount = true
 	ops.FullChar = ' '
 	ops.FullCharWhenFirst = ' '
 	ops.FullCharWhenLast = ' '

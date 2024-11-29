@@ -438,14 +438,15 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 		itemMaxLen      int
 		menuName        string
 		windowWidth     = a.WindowWidth()
+		maxIndexWidth   = int(math.Log10(float64((m.menuPageSize*m.menuCurPage)-1))) + 1
 	)
 
 	isSelected := !m.inSearching && index == m.selectedIndex
 
 	if isSelected {
-		menuTitle = fmt.Sprintf(" => %d. %s", index, m.menuList[index].Title)
+		menuTitle = fmt.Sprintf(fmt.Sprintf(" => %%%dd. %%s", maxIndexWidth), index, m.menuList[index].Title)
 	} else {
-		menuTitle = fmt.Sprintf("    %d. %s", index, m.menuList[index].Title)
+		menuTitle = fmt.Sprintf(fmt.Sprintf("    %%%dd. %%s", maxIndexWidth), index, m.menuList[index].Title)
 	}
 	if len(m.menuList[index].Subtitle) != 0 {
 		menuTitle += " "
