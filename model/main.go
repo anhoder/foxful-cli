@@ -118,9 +118,9 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 
 		// menu start col, row
 		m.menuStartRow = msg.Height / 3
-		// If dynamic row count is on, we want at most 10 rows at the start to give more space to the entries
-		if m.options.DynamicRowCount && m.menuStartRow > 10 {
-			m.menuStartRow = 10
+		// If dynamic row count is on, we want at most 7 rows at the start to give more space to the entries
+		if m.options.DynamicRowCount && m.menuStartRow > 7 {
+			m.menuStartRow = 7
 		}
 
 		if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
@@ -359,6 +359,9 @@ func (m *Main) MenuList() []MenuItem {
 
 func (m *Main) menuListView(a *App, top *int) string {
 	var menuListBuilder strings.Builder
+	if m.options.DynamicRowCount {
+		m.menuCurPage = m.selectedIndex/m.menuPageSize + 1
+	}
 	menus := m.getCurPageMenus()
 	var lines, maxLines int
 	if m.isDualColumn {
