@@ -359,6 +359,9 @@ func (m *Main) MenuList() []MenuItem {
 
 func (m *Main) menuListView(a *App, top *int) string {
 	var menuListBuilder strings.Builder
+	if m.options.DynamicRowCount {
+		m.menuCurPage = m.selectedIndex/m.menuPageSize + 1
+	}
 	menus := m.getCurPageMenus()
 	var lines, maxLines int
 	if m.isDualColumn {
