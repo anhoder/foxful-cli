@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/anhoder/foxful-cli/model"
 	"github.com/anhoder/foxful-cli/util"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/muesli/termenv"
 )
 
 var (
@@ -140,11 +140,11 @@ func (p *Component1) View(_ *model.App, main *model.Main) (string, int) {
 		t       = time.Now()
 	)
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line1: "+strconv.Itoa(t.Hour())+"h\n", termenv.ANSIBrightBlue))
+	builder.WriteString(util.SetFgStyle("line1: "+strconv.Itoa(t.Hour())+"h\n", lipgloss.BrightBlue))
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line2: "+strconv.Itoa(t.Minute())+"m\n", termenv.ANSIBrightCyan))
+	builder.WriteString(util.SetFgStyle("line2: "+strconv.Itoa(t.Minute())+"m\n", lipgloss.BrightCyan))
 	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line3: "+strconv.Itoa(t.Second())+"s", termenv.ANSIBrightYellow))
+	builder.WriteString(util.SetFgStyle("line3: "+strconv.Itoa(t.Second())+"s", lipgloss.BrightYellow))
 
 	return builder.String(), 3
 }
