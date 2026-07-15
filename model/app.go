@@ -61,10 +61,19 @@ func (a *App) Init() tea.Cmd {
 			panic("Fail to start ticker: " + err.Error())
 		}
 	}
+
+	var initCmd tea.Cmd
 	if initPage, ok := a.page.(InitPage); ok {
-		return initPage.Init(a)
+		initCmd = initPage.Init(a)
+	}
+	if a.requiresInlineClear() {
+		return tea.Sequence(tea.ClearScreen, initCmd)
 	}
 	return nil
+}
+
+func (a *App) requiresInlineClear() bool {
+	return !a.options.AltScreen && a.page != nil && a.page.Type() == PtStartup
 }
 
 func (a *App) Close() {
@@ -95,7 +104,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Make sure these keys always quit
 	switch msgWithType := msg.(type) {
 	case tea.KeyPressMsg:
-		var k = msgWithType.String()
+		k := msgWithType.String()
 		if k != "q" && k != "Q" && k != "ctrl+c" {
 			break
 		}
