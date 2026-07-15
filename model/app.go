@@ -61,10 +61,29 @@ func (a *App) Init() tea.Cmd {
 			panic("Fail to start ticker: " + err.Error())
 		}
 	}
-	if initPage, ok := a.page.(InitPage); ok {
-		return initPage.Init(a)
+
+	var cmds []tea.Cmd
+
+	// In non-altScreen mode, bubbletea's initial cursor move only writes
+	// '\r' (carriage return) which handles horizontal but not vertical
+	// positioning. Content then renders from the current terminal line
+	// instead of line 0, causing all content to be shifted down. Explicitly
+	// send Cursor Home Position to fix this.
+	//
+	// See: charm.land/bubbletea/v2/cursed_renderer.go start()
+	//      uv.TerminalRenderer.moveCursor() initial (-1,-1) handling
+	if !a.options.AltScreen {
+		cmds = append(cmds, tea.Raw("\x1b[H"))
 	}
-	return nil
+
+	if initPage, ok := a.page.(InitPage); ok {
+		cmds = append(cmds, initPage.Init(a))
+	}
+
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Sequence(cmds...)
 }
 
 func (a *App) Close() {
