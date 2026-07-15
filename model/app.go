@@ -61,19 +61,10 @@ func (a *App) Init() tea.Cmd {
 			panic("Fail to start ticker: " + err.Error())
 		}
 	}
-
-	var initCmd tea.Cmd
 	if initPage, ok := a.page.(InitPage); ok {
-		initCmd = initPage.Init(a)
-	}
-	if a.requiresInlineClear() {
-		return tea.Sequence(tea.ClearScreen, initCmd)
+		return initPage.Init(a)
 	}
 	return nil
-}
-
-func (a *App) requiresInlineClear() bool {
-	return !a.options.AltScreen && a.page != nil && a.page.Type() == PtStartup
 }
 
 func (a *App) Close() {
