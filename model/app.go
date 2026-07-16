@@ -147,6 +147,7 @@ func (a *App) Run() error {
 		ListenGlobalKeys(a, a.options.GlobalKeyHandlers)
 	}
 
+	a.options.TeaOptions = append(a.options.TeaOptions, tea.WithHardTabs(false), tea.WithFoxfulRenderer())
 	a.program = tea.NewProgram(a, a.options.TeaOptions...)
 	_, err := a.program.Run()
 	return err
