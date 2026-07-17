@@ -37,4 +37,4 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 )
 
-replace charm.land/bubbletea/v2 v2.0.8 => github.com/go-musicfox/bubbletea/v2 v2.0.8-foxful-1.1
+replace charm.land/bubbletea/v2 v2.0.8 => github.com/go-musicfox/bubbletea/v2 v2.0.8-foxful-1.2
