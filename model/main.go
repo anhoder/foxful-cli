@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,8 +12,9 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/anhoder/foxful-cli/layout"
+	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
-	"github.com/mattn/go-runewidth"
 )
 
 type Main struct {
@@ -22,13 +24,12 @@ type Main struct {
 
 	isDualColumn bool
 
-	menuTitle            *MenuItem
-	menuTitleStartRow    int
-	menuTitleStartColumn int
+	menuTitle *MenuItem
 
-	menuStartRow    int
-	menuStartColumn int
-	menuBottomRow   int
+	menuStartRow     int
+	menuStartColumn  int
+	menuBottomRow    int
+	menuListStartRow int // actual row where the first menu item renders
 
 	menuCurPage  int
 	menuPageSize int
@@ -56,6 +57,28 @@ type Main struct {
 
 	kbCtrls    []KeyboardController
 	mouseCtrls []MouseController
+
+	statusBar StatusBar
+
+	// Mouse click tracking for double-click detection
+	lastClickTime time.Time
+	lastClickX    int
+	lastClickY    int
+
+	// Mouse hover tracking for breadcrumb segments
+	hoveredBreadcrumbIdx int // -1 = none, 0+ = display index in breadcrumbSegments
+
+	// Mouse hover tracking for menu list items
+	hoveredMenuItemIdx int // -1 = none, 0+ = index in menuList
+
+	// hoveredBackButton tracks whether the mouse is hovering over the back
+	// button shown before the menu title when inside a submenu.
+	hoveredBackButton bool
+
+	// hoverPointerActive tracks whether the mouse is currently over a clickable
+	// element. When true, the terminal mouse pointer is set to "pointer" (hand
+	// cursor) via OSC 22. When false, it's reset to "default".
+	hoverPointerActive bool
 }
 
 type tickMainMsg struct{}
@@ -80,23 +103,28 @@ func NewMain(app *App, options *Options) (m *Main) {
 	}
 
 	m = &Main{
-		app:          app,
-		options:      options,
-		menuTitle:    mainMenuTitle,
-		menu:         options.MainMenu,
-		menuStack:    &util.Stack{},
-		menuCurPage:  1,
-		menuPageSize: 10,
-		searchInput:  textinput.New(),
-		components:   options.Components,
-		kbCtrls:      options.KBControllers,
-		mouseCtrls:   options.MouseControllers,
+		app:                  app,
+		options:              options,
+		menuTitle:            mainMenuTitle,
+		menu:                 options.MainMenu,
+		menuStack:            &util.Stack{},
+		menuCurPage:          1,
+		menuPageSize:         10,
+		searchInput:          textinput.New(),
+		components:           options.Components,
+		kbCtrls:              options.KBControllers,
+		mouseCtrls:           options.MouseControllers,
+		statusBar:            options.StatusBar,
+		hoveredBreadcrumbIdx: -1,
+		hoveredMenuItemIdx:   -1,
+		hoveredBackButton:    false,
+		hoverPointerActive:   false,
 	}
 	m.menuList = m.menu.MenuViews()
 	m.searchInput.Placeholder = " " + SearchPlaceholder
 	m.searchInput.Prompt = util.GetFocusedPrompt()
 	s := textinput.DefaultStyles(true)
-	s.Focused.Text = util.GetPrimaryFontStyle()
+	s.Focused.Text = util.GetPrimaryFontStyle(true)
 	m.searchInput.SetStyles(s)
 	m.searchInput.CharLimit = 32
 
@@ -127,6 +155,24 @@ func (m *Main) Init(a *App) tea.Cmd {
 	return a.Tick(time.Nanosecond)
 }
 
+func (m *Main) computeTitleStartRow() int {
+	titleStartRow := 0
+	if m.options.WhetherDisplayTitle && m.menuStartRow > 2 {
+		if m.menuStartRow > 4 {
+			titleStartRow = m.menuStartRow - 3
+		} else {
+			titleStartRow = 2
+		}
+	} else if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
+		if m.menuStartRow > 3 {
+			titleStartRow = m.menuStartRow - 3
+		} else {
+			titleStartRow = 2
+		}
+	}
+	return titleStartRow
+}
+
 func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -155,6 +201,7 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 			if p.newMenu != nil {
 				p.newMenu.FormatMenuItem(p.newTitle)
 			}
+			m.hoveredMenuItemIdx = -1
 			menuList := p.newMenu.MenuViews()
 			m.menu = p.newMenu
 			m.menuList = menuList
@@ -170,29 +217,28 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.isDualColumn = msg.Width >= 75 && m.options.DualColumn
-
-		// menu start col, row
 		m.menuStartRow = msg.Height / 3
-		// Height of the bottom part of the music player. Used in calculating the number of rows left.
-		// 3 lines for search + 5 lines of lyrics + 6 lines of song name and progress bar = 14. But somehow
-		// 13 works better.
-		bottomHeight := 13
-		// MaxMenuStartRow limit applies regardless of DynamicRowCount
 		if m.options.MaxMenuStartRow > 0 {
 			if m.menuStartRow > m.options.MaxMenuStartRow {
 				m.menuStartRow = m.options.MaxMenuStartRow
 			}
 		}
-		if m.options.DynamicRowCount {
-			if m.options.BottomHeight > 0 {
-				bottomHeight = m.options.BottomHeight
-			}
-		}
-
 		if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
 			m.menuStartRow--
 		}
+		if m.isDualColumn {
+			m.menuStartColumn = msg.Width / 6
+		} else {
+			m.menuStartColumn = msg.Width / 4
+		}
+		if m.menuStartColumn < 2 {
+			m.menuStartColumn = 2
+		}
 
+		bottomHeight := 13
+		if m.options.BottomHeight > 0 {
+			bottomHeight = m.options.BottomHeight
+		}
 		if m.options.DynamicRowCount {
 			maxEntries := (msg.Height - m.menuStartRow - bottomHeight) * m.getNumColumns()
 			if maxEntries > 10 {
@@ -200,38 +246,40 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 			} else {
 				m.menuPageSize = 10
 			}
-		}
-
-		if m.isDualColumn {
-			m.menuStartColumn = (msg.Width - 60) / 2
-			m.menuBottomRow = m.menuStartRow + int(math.Ceil(float64(m.menuPageSize)/2)) + 1 // 1 for search bar
 		} else {
-			m.menuStartColumn = (msg.Width - 20) / 2
-			m.menuBottomRow = m.menuStartRow + m.menuPageSize + 1 // 1 for search bar
+			m.menuPageSize = 10
 		}
 
-		// menu title satrt col, row
-		m.menuTitleStartColumn = m.menuStartColumn
-		if m.options.WhetherDisplayTitle && m.menuStartRow > 2 {
-			if m.menuStartRow > 4 {
-				m.menuTitleStartRow = m.menuStartRow - 3
-			} else {
-				m.menuTitleStartRow = 2
-			}
-		} else if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
-			if m.menuStartRow > 3 {
-				m.menuTitleStartRow = m.menuStartRow - 3
-			} else {
-				m.menuTitleStartRow = 2
-			}
-		}
+		// Compute actual menu list start row and bottom row for hit-testing
+		titleStartRow := m.computeTitleStartRow()
 
-		// components
-		for _, component := range m.components {
-			if component == nil {
-				continue
+		// Leading rows before the menu list:
+		// - Title bar (if displayed): 1 row
+		// - Filler blank lines: strings.Repeat("\n", titleStartRow-1) → getLines produces titleStartRow parts
+		// - Menu title: 1 row
+		// - Gap "\n": getLines splits into 2 empty parts → 2 rows
+		leadingRows := 0
+		if m.options.WhetherDisplayTitle {
+			leadingRows++
+		}
+		if titleStartRow > 1 {
+			leadingRows += titleStartRow
+		}
+		leadingRows += 3 // menu title (1) + gap "\n" → getLines produces 2 parts
+
+		m.menuListStartRow = leadingRows
+
+		menuDisplayLines := m.menuPageSize
+		if m.isDualColumn {
+			menuDisplayLines = int(math.Ceil(float64(m.menuPageSize) / 2))
+		}
+		m.menuBottomRow = m.menuListStartRow + menuDisplayLines
+
+		if m.menuCurPage > 0 {
+			maxPage := int(math.Ceil(float64(len(m.menuList)) / float64(m.menuPageSize)))
+			if m.menuCurPage > maxPage {
+				m.menuCurPage = maxPage
 			}
-			component.Update(msg, a)
 		}
 		return m, a.RerenderCmd(true)
 	}
@@ -240,74 +288,106 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 }
 
 func (m *Main) View(a *App) string {
-	windowHeight, windowWidth := a.WindowHeight(), a.WindowWidth()
-	if windowHeight <= 0 || windowWidth <= 0 {
+	w, h := a.WindowWidth(), a.WindowHeight()
+	if w <= 0 || h <= 0 {
 		return ""
 	}
 
-	var (
-		builder strings.Builder
-		top     int // num of rows from top
-	)
+	var sections []string
 
-	// title
+	// ── 1. Title bar ──
 	if m.options.WhetherDisplayTitle {
-		builder.WriteString(m.TitleView(a, &top))
-	} else {
-		top++
+		sections = append(sections, m.TitleView(a))
 	}
 
+	// ── 2. Menu sections ──
 	if !m.options.HideMenu {
-		// menu title
-		builder.WriteString(m.MenuTitleView(a, &top, nil))
+		titleStartRow := m.computeTitleStartRow()
 
-		// menu list
-		builder.WriteString(m.menuListView(a, &top))
+		// Inject loading tips into a copy of the menu title
+		mt := m.menuTitle
+		if m.loadingTips != "" {
+			tmp := *mt
+			if tmp.Subtitle != "" {
+				tmp.Subtitle = tmp.Subtitle + " " + m.loadingTips
+			} else {
+				tmp.Subtitle = m.loadingTips
+			}
+			mt = &tmp
+		}
 
-		// search input
-		builder.WriteString(m.searchInputView(a, &top))
+		// Vertical gap to menu title row.
+		if titleStartRow > 1 {
+			sections = append(sections, strings.Repeat("\n", max(0, titleStartRow-1)))
+		}
+		sections = append(sections, m.menuTitleViewContent(a, mt))
+
+		// Vertical gap: title row → menu start row
+		sections = append(sections, "\n")
+		sections = append(sections, m.menuListView(a))
+		sections = append(sections, m.searchInputView(a))
 	} else {
-		builder.WriteString("\n\n\n")
-		top += 2
+		sections = append(sections, "\n\n\n")
 	}
 
-	// components view
+	// ── 3. Components (natural flow) ──
 	for _, component := range m.components {
 		if component == nil {
 			continue
 		}
-		view, lines := component.View(a, m)
-		builder.WriteString(view)
-		top += lines
+		view, _ := component.View(a, m)
+		if view != "" {
+			sections = append(sections, view)
+		}
 	}
 
-	// Instead of relying on the 'top' tracker (which components can inflate),
-	// count actual newlines in the output to ensure it always fills the
-	// terminal height. An output shorter than the terminal causes the
-	// bubbletea renderer to leave cells from the previous frame uncleared,
-	// resulting in display corruption/overlay.
-	output := builder.String()
-	lineCount := strings.Count(output, "\n")
-	if lineCount < windowHeight-1 {
-		output += strings.Repeat("\n", windowHeight-1-lineCount)
+	// ── 4. Compose vertically ──
+	body := layout.JoinVertical(lipgloss.Left, sections...)
+
+	// ── 5. Status bar at bottom ──
+	statusBarView := ""
+	statusBarH := 0
+	if m.statusBar != nil {
+		statusBarView = m.statusBar.View(a, m)
+		statusBarH = lipgloss.Height(statusBarView)
 	}
-	return output
+
+	// Height-fill: pad content to fill space before status bar
+	if lipgloss.Height(body) < h-statusBarH {
+		body = lipgloss.NewStyle().Height(h - statusBarH).Render(body)
+	}
+
+	// Combine body + status bar, then wrap with AppBackground.
+	// AppBackground is transparent by default (terminal bg shows through).
+	ss := style.CurrentStyleSet()
+	var content string
+	if statusBarView != "" {
+		content = lipgloss.JoinVertical(lipgloss.Left, body, statusBarView)
+	} else {
+		content = body
+	}
+	return ss.AppBackground.Width(w).Render(content)
 }
 
+// MenuTitleStartColumn returns the horizontal column where the menu title starts.
 func (m *Main) MenuTitleStartColumn() int {
-	return m.menuTitleStartColumn
+	return m.menuStartColumn
 }
 
+// MenuTitleStartRow returns the row where the menu title starts.
+// Computed dynamically in View() since it was removed as a struct field.
+// Returns 0 as a sensible default; downstream should use lipgloss layout instead.
 func (m *Main) MenuTitleStartRow() int {
-	return m.menuTitleStartRow
+	return 0
 }
 
+// MenuStartColumn returns the horizontal column where menu items start.
 func (m *Main) MenuStartColumn() int {
 	return m.menuStartColumn
 }
 
 func (m *Main) MenuStartRow() int {
-	return m.menuStartRow
+	return m.menuListStartRow
 }
 
 func (m *Main) MenuBottomRow() int {
@@ -346,97 +426,96 @@ func (m *Main) SetSelectedIndex(i int) {
 	m.selectedIndex = i
 }
 
-// TitleView title view
-func (m *Main) TitleView(a *App, top *int) string {
-	var (
-		titleBuilder strings.Builder
-		windowWidth  = a.WindowWidth()
-	)
+// TitleView renders the app name as a decorative bar with dashes on both sides.
+func (m *Main) TitleView(a *App) string {
 	appName := " " + m.options.AppName + " "
-	titleLen := runewidth.StringWidth(appName)
-	prefixLen := (windowWidth - titleLen) / 2
-	suffixLen := windowWidth - prefixLen - titleLen
+	w := a.WindowWidth()
+	titleLen := layout.Width(appName)
+	prefixLen := (w - titleLen) / 2
+	suffixLen := w - prefixLen - titleLen
+
+	var b strings.Builder
 	if prefixLen > 0 {
-		titleBuilder.WriteString(strings.Repeat("─", prefixLen))
+		b.WriteString(strings.Repeat("─", prefixLen))
 	}
-	titleBuilder.WriteString(appName)
+	b.WriteString(appName)
 	if suffixLen > 0 {
-		titleBuilder.WriteString(strings.Repeat("─", suffixLen))
+		b.WriteString(strings.Repeat("─", suffixLen))
 	}
-
-	*top++
-
-	return util.SetFgStyle(titleBuilder.String(), util.GetPrimaryColor())
+	return style.CurrentStyleSet().Title.Render(b.String())
 }
 
-// MenuTitleView menu title
-func (m *Main) MenuTitleView(a *App, top *int, menuTitle *MenuItem) string {
-	var (
-		menuTitleBuilder strings.Builder
-		title            string
-		windowWidth      = a.WindowWidth()
-		maxLen           = windowWidth - m.menuTitleStartColumn
-	)
+// backButtonIcon returns the styled back button icon suitable for prepending
+// to the menu title when inside a submenu.
+func (m *Main) backButtonIcon() string {
+	ss := style.CurrentStyleSet()
+	if m.hoveredBackButton {
+		return ss.BackButtonHover.Render("←")
+	}
+	return ss.BackButton.Render("←")
+}
 
+// menuTitleViewContent renders the menu title content string, left-aligned
+// at menuStartColumn to match the menu items' horizontal position.
+// The loading tips should be injected by the caller (see View).
+func (m *Main) menuTitleViewContent(a *App, menuTitle *MenuItem) string {
 	if menuTitle == nil {
 		menuTitle = m.menuTitle
 	}
+	windowWidth := a.WindowWidth()
+	startCol := m.menuStartColumn
+	ss := style.CurrentStyleSet()
 
-	// Inject transient loading/progress text into the subtitle so it
-	// renders through bubbletea's normal pipeline (no direct terminal writes).
-	if m.loadingTips != "" && top != nil {
-		tmp := *menuTitle
-		if tmp.Subtitle != "" {
-			tmp.Subtitle = tmp.Subtitle + " " + m.loadingTips
-		} else {
-			tmp.Subtitle = m.loadingTips
-		}
-		menuTitle = &tmp
-	}
+	// When in a submenu, show a back button to the left of the title.
+	// The back button is positioned at startCol - backButtonWidth so the
+	// title itself remains at its original startCol position.
+	showBack := m.menuStack.Len() > 0
 
-	if top != nil && m.menuTitleStartRow-*top > 0 {
-		menuTitleBuilder.WriteString(strings.Repeat("\n", m.menuTitleStartRow-*top))
-	}
-
+	maxLen := windowWidth - startCol
 	realString := menuTitle.OriginString()
 	formatString := menuTitle.String()
-	if m.options.CenterEverything {
-		stringLen := runewidth.StringWidth(realString)
-		if stringLen >= windowWidth {
-			title = runewidth.Truncate(formatString, windowWidth, "")
-		} else {
-			spaceLeft := (windowWidth - stringLen) / 2
-			spaceRight := windowWidth - spaceLeft - stringLen
-			title = strings.Repeat(" ", spaceLeft) + formatString + strings.Repeat(" ", spaceRight)
+
+	var titleText string
+	if lipgloss.Width(realString) > maxLen {
+		// Truncate long titles: prioritize title, clip subtitle if needed
+		tmp := *menuTitle
+		titleLen := lipgloss.Width(tmp.Title)
+		subTitleLen := lipgloss.Width(tmp.Subtitle)
+		if titleLen >= maxLen-1 {
+			tmp.Title = lipgloss.NewStyle().Width(maxLen - 1).MaxWidth(maxLen - 1).Render(tmp.Title)
+			tmp.Subtitle = ""
+		} else if subTitleLen >= maxLen-titleLen-1 {
+			tmp.Subtitle = lipgloss.NewStyle().Width(maxLen - titleLen - 1).MaxWidth(maxLen - titleLen - 1).Render(tmp.Subtitle)
 		}
+		titleText = tmp.String()
 	} else {
-		if runewidth.StringWidth(realString) > maxLen {
-			menuTmp := *menuTitle
-			titleLen := runewidth.StringWidth(menuTmp.Title)
-			subTitleLen := runewidth.StringWidth(menuTmp.Subtitle)
-			if titleLen >= maxLen-1 {
-				menuTmp.Title = runewidth.Truncate(menuTmp.Title, maxLen-1, "")
-				menuTmp.Subtitle = ""
-			} else if subTitleLen >= maxLen-titleLen-1 {
-				menuTmp.Subtitle = runewidth.Truncate(menuTmp.Subtitle, maxLen-titleLen-1, "")
-			}
-			title = menuTmp.String()
-		} else {
-			formatLen := runewidth.StringWidth(formatString)
-			realLen := runewidth.StringWidth(realString)
-			title = runewidth.FillRight(menuTitle.String(), maxLen+formatLen-realLen)
-		}
-		if m.menuTitleStartColumn > 0 {
-			menuTitleBuilder.WriteString(strings.Repeat(" ", m.menuTitleStartColumn))
-		}
-	}
-	menuTitleBuilder.WriteString(util.SetFgStyle(title, lipgloss.BrightGreen))
-
-	if top != nil {
-		*top = m.menuTitleStartRow
+		titleText = lipgloss.NewStyle().Width(maxLen).Render(formatString)
 	}
 
-	return menuTitleBuilder.String()
+	// Style the title independently — back button must NOT affect its color.
+	styledTitle := ss.MenuTitle.Render(titleText)
+
+	if showBack {
+		// Back button at startCol - backButtonWidth, title unchanged at startCol.
+		// Layout: [padding]←[space][title...]
+		backIcon := m.backButtonIcon()
+		padding := startCol - backButtonWidth
+		if padding < 0 {
+			padding = 0
+		}
+		return strings.Repeat(" ", padding) + backIcon + " " + styledTitle
+	}
+
+	// No back button: original padding + title
+	if startCol > 0 {
+		styledTitle = lipgloss.NewStyle().PaddingLeft(startCol).Render(styledTitle)
+	}
+	return styledTitle
+}
+
+// MenuTitleView menu title
+func (m *Main) MenuTitleView(a *App) string {
+	return m.menuTitleViewContent(a, m.menuTitle)
 }
 
 func (m *Main) MenuList() []MenuItem {
@@ -453,17 +532,18 @@ func (m *Main) getNumColumns() int {
 func (m *Main) forceEntryLength(item *MenuItem, targetLength int) string {
 	// Case 1:
 	// Only enough space for the main title. Not enough width for subtitle.
-	titleWidth := runewidth.StringWidth(item.Title)
+	titleWidth := layout.Width(item.Title)
 	minSubtitleWidth := 5
 	if titleWidth >= targetLength-minSubtitleWidth {
-		title := runewidth.Truncate(item.Title, targetLength, "")
-		return runewidth.FillRight(title, targetLength)
+		return lipgloss.NewStyle().
+			Width(targetLength).
+			Render(item.Title)
 	}
 	// Case 2:
 	// Enough space for everything.
-	fullWidth := runewidth.StringWidth(item.OriginString())
+	fullWidth := layout.Width(item.OriginString())
 	if fullWidth <= targetLength {
-		return item.String() + strings.Repeat(" ", targetLength-fullWidth)
+		return lipgloss.NewStyle().Width(targetLength).Render(item.OriginString())
 	}
 	// Case 3:
 	// Enough space for main title. Need to scroll subtitle.
@@ -477,19 +557,20 @@ func (m *Main) forceEntryLength(item *MenuItem, targetLength int) string {
 	}
 	currentWidth := 0
 	for i := indexStart; currentWidth < subtitleSpace; i = (i + 1) % len(r) {
+		rw := layout.Width(string(r[i]))
+		if currentWidth+rw > subtitleSpace {
+			break
+		}
 		s = append(s, r[i])
-		currentWidth += runewidth.RuneWidth(r[i])
+		currentWidth += rw
 	}
-	// Truncate in case a character of width 2 goes over the limit
-	subtitle := runewidth.Truncate(string(s), subtitleSpace, "")
-	// Fill with space in case we have 1 space remaining but the next rune has width 2
-	subtitle = runewidth.FillRight(subtitle, subtitleSpace)
-	return item.Title + " " + util.SetFgStyle(subtitle, lipgloss.BrightBlack)
+	subtitle := lipgloss.NewStyle().Width(subtitleSpace).MaxWidth(subtitleSpace).Render(string(s))
+	return item.Title + " " + style.CurrentStyleSet().Subtitle.Render(subtitle)
 }
 
 func (m *Main) formatEntry(item *MenuItem, index int, targetLength int) string {
 	if item == nil {
-		return strings.Repeat(" ", targetLength)
+		return lipgloss.NewStyle().Width(targetLength).Render("")
 	}
 	var fmtStart string
 	if !m.inSearching && index == m.selectedIndex {
@@ -503,7 +584,7 @@ func (m *Main) formatEntry(item *MenuItem, index int, targetLength int) string {
 		index,
 		m.forceEntryLength(item, titleLength))
 	if m.isSelected(index) {
-		return util.SetFgStyle(songEntry, util.GetPrimaryColor())
+		return style.CurrentStyleSet().SelectedItem.Render(songEntry)
 	}
 	return songEntry
 }
@@ -519,7 +600,7 @@ func (m *Main) centeredMenuView(a *App, lines int) string {
 	for i := startIndex; i < endIndex; i++ {
 		if i < len(m.menuList) {
 			menuItem := m.menuList[i]
-			length := runewidth.StringWidth(menuItem.OriginString())
+			length := layout.Width(menuItem.OriginString())
 			titleLengths = append(titleLengths, length)
 			allSongs = append(allSongs, &menuItem)
 		} else {
@@ -559,41 +640,23 @@ func (m *Main) centeredMenuView(a *App, lines int) string {
 		entryLength = itemMaxLength
 	}
 
-	// 4 is the correction
-	paddingLength := a.windowWidth - entryLength*m.getNumColumns() - 4
-	var (
-		leftProportion   = 0.5
-		middleProportion = 0.0
-		// rightProportion  = 0.5
-	)
-	if m.IsDualColumn() {
-		leftProportion = 0.45
-		middleProportion = 0.1
-		// rightProportion = 0.45
-	}
-	paddingLeft := int(math.Round(float64(paddingLength) * leftProportion))
-	paddingLength -= paddingLeft
-	paddingMiddle := int(math.Round(float64(paddingLength) * middleProportion))
-	paddingLength -= paddingMiddle
-	paddingRight := paddingLength + 4
-
-	var result strings.Builder
+	var rows []string
 	for i := 0; i < lines; i++ {
 		index := i * m.getNumColumns()
 		menuIndex := m.getPageStartIndex() + index
-		result.WriteString(strings.Repeat(" ", paddingLeft))
-		result.WriteString(m.formatEntry(allSongs[index], menuIndex, entryLength))
+		left := m.formatEntry(allSongs[index], menuIndex, entryLength)
 		if m.isDualColumn {
-			result.WriteString(strings.Repeat(" ", paddingMiddle))
-			result.WriteString(m.formatEntry(allSongs[index+1], menuIndex+1, entryLength))
+			right := m.formatEntry(allSongs[index+1], menuIndex+1, entryLength)
+			row := layout.JoinHorizontal(lipgloss.Center, left, right)
+			rows = append(rows, lipgloss.NewStyle().Width(a.windowWidth).Align(lipgloss.Center).Render(row))
+		} else {
+			rows = append(rows, lipgloss.NewStyle().Width(a.windowWidth).Align(lipgloss.Center).Render(left))
 		}
-		result.WriteString(strings.Repeat(" ", paddingRight))
-		result.WriteString("\n")
 	}
-	return result.String()
+	return layout.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m *Main) menuListView(a *App, top *int) string {
+func (m *Main) menuListView(a *App) string {
 	var menuListBuilder strings.Builder
 	if m.options.DynamicRowCount {
 		m.menuCurPage = m.selectedIndex/m.menuPageSize + 1
@@ -608,81 +671,27 @@ func (m *Main) menuListView(a *App, top *int) string {
 		maxLines = m.menuPageSize
 	}
 
-	if m.menuStartRow > *top {
-		menuListBuilder.WriteString(strings.Repeat("\n", m.menuStartRow-*top))
-	}
-
 	if m.options.CenterEverything {
 		menuListBuilder.WriteString(m.centeredMenuView(a, lines))
 	} else {
+		var menuLines []string
 		for i := 0; i < lines; i++ {
-			str := m.menuLineView(a, i)
-			menuListBuilder.WriteString(str)
-			menuListBuilder.WriteString("\n")
+			menuLines = append(menuLines, m.menuLineView(a, i))
 		}
+		menuListBuilder.WriteString(lipgloss.JoinVertical(lipgloss.Left, menuLines...))
 	}
 
-	// fill blanks
+	// fill blanks to maintain fixed page size
 	if maxLines > lines {
-		windowWidth := a.WindowWidth()
-		if windowWidth-m.menuStartColumn > 0 {
-			menuListBuilder.WriteString(strings.Repeat(" ", windowWidth-m.menuStartColumn))
+		var fillLines []string
+		blankLine := lipgloss.NewStyle().Width(a.WindowWidth() - m.menuStartColumn).Render("")
+		for i := lines; i < maxLines; i++ {
+			fillLines = append(fillLines, blankLine)
 		}
-		menuListBuilder.WriteString(strings.Repeat("\n", maxLines-lines))
+		menuListBuilder.WriteString(lipgloss.JoinVertical(lipgloss.Left, fillLines...))
 	}
-
-	*top = m.menuBottomRow
 
 	return menuListBuilder.String()
-}
-
-func (m *Main) getPageStartIndex() int {
-	return (m.menuCurPage - 1) * m.menuPageSize
-}
-
-func (m *Main) menuLineView(a *App, line int) string {
-	var (
-		menuLineBuilder strings.Builder
-		index           int
-		windowWidth     = a.WindowWidth()
-	)
-	if m.isDualColumn {
-		index = line*2 + m.getPageStartIndex()
-	} else {
-		index = line + m.getPageStartIndex()
-	}
-	if index > len(m.menuList)-1 {
-		index = len(m.menuList) - 1
-	}
-	if m.menuStartColumn > 4 {
-		menuLineBuilder.WriteString(strings.Repeat(" ", m.menuStartColumn-4))
-	}
-	menuItemStr, menuItemLen := m.menuItemView(a, index)
-	menuLineBuilder.WriteString(menuItemStr)
-	if m.isDualColumn {
-		var secondMenuItemLen int
-		if index < len(m.menuList)-1 {
-			var secondMenuItemStr string
-			secondMenuItemStr, secondMenuItemLen = m.menuItemView(a, index+1)
-			menuLineBuilder.WriteString(secondMenuItemStr)
-		} else {
-			menuLineBuilder.WriteString("    ")
-			secondMenuItemLen = 4
-		}
-		if windowWidth-menuItemLen-secondMenuItemLen-m.menuStartColumn > 0 {
-			menuLineBuilder.WriteString(strings.Repeat(" ", windowWidth-menuItemLen-secondMenuItemLen-m.menuStartColumn))
-		}
-	}
-
-	return menuLineBuilder.String()
-}
-
-func (m *Main) getMaxIndexWidth() int {
-	return int(math.Log10(float64((m.menuPageSize*m.menuCurPage)-1))) + 1
-}
-
-func (m *Main) isSelected(index int) bool {
-	return !m.inSearching && index == m.selectedIndex
 }
 
 func (m *Main) menuItemView(a *App, index int) (string, int) {
@@ -696,15 +705,28 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 	)
 
 	isSelected := m.isSelected(index)
+	isHovered := !m.inSearching && index == m.hoveredMenuItemIdx
+
+	// Resolve title style based on selection + hover state
+	ss := style.CurrentStyleSet()
+	titleStyle := ss.MenuItem
+	switch {
+	case isHovered && isSelected:
+		titleStyle = ss.SelectedItemHover
+	case isHovered:
+		titleStyle = ss.MenuItemHover
+	case isSelected:
+		titleStyle = ss.SelectedItem
+	}
 
 	if isSelected {
 		menuTitle = fmt.Sprintf(fmt.Sprintf(" => %%%dd. %%s", maxIndexWidth), index, m.menuList[index].Title)
 	} else {
 		menuTitle = fmt.Sprintf(fmt.Sprintf("    %%%dd. %%s", maxIndexWidth), index, m.menuList[index].Title)
 	}
-	if len(m.menuList[index].Subtitle) != 0 {
-		menuTitle += " "
-	}
+	// if len(m.menuList[index].Subtitle) != 0 {
+	menuTitle += " "
+	// }
 
 	if m.isDualColumn {
 		if windowWidth <= 88 {
@@ -720,43 +742,42 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 		itemMaxLen = windowWidth - m.menuStartColumn
 	}
 
-	menuTitleLen := runewidth.StringWidth(menuTitle)
-	menuSubtitleLen := runewidth.StringWidth(m.menuList[index].Subtitle)
+	menuTitleLen := lipgloss.Width(menuTitle)
+	menuSubtitleLen := lipgloss.Width(m.menuList[index].Subtitle)
 
 	var tmp string
 	if menuTitleLen > itemMaxLen {
-		tmp = runewidth.Truncate(menuTitle, itemMaxLen, "")
-		tmp = runewidth.FillRight(tmp, itemMaxLen) // fix: 切割中文后缺少字符导致未对齐
-		if isSelected {
-			menuName = util.SetFgStyle(tmp, util.GetPrimaryColor())
-		} else {
-			menuName = util.SetNormalStyle(tmp)
-		}
+		// Title too long — truncate the whole line uniformly.
+		// Cannot split prefix/title styling here since the boundary
+		// may fall mid-title.
+		tmp = lipgloss.NewStyle().
+			Width(itemMaxLen).
+			MaxWidth(itemMaxLen).
+			Render(menuTitle)
+		menuName = titleStyle.Render(tmp)
 	} else if menuTitleLen+menuSubtitleLen > itemMaxLen {
-		r := []rune(m.menuList[index].Subtitle)
-		r = append(r, []rune("   ")...)
-		var i int
-		if m.options.Ticker != nil {
-			i = int(m.options.Ticker.PassedTime().Milliseconds()/500) % len(r)
-		}
+		r := []rune(m.menuList[index].Subtitle + "   ")
 		s := make([]rune, 0, itemMaxLen-menuTitleLen)
-		for j := i; j < i+itemMaxLen-menuTitleLen; j++ {
-			s = append(s, r[j%len(r)])
+		indexStart := 0
+		if m.options.Ticker != nil {
+			indexStart = int(m.options.Ticker.PassedTime().Milliseconds() / 500 % int64(len(r)))
 		}
-		tmp = runewidth.Truncate(string(s), itemMaxLen-menuTitleLen, "")
-		tmp = runewidth.FillRight(tmp, itemMaxLen-menuTitleLen)
-		if isSelected {
-			menuName = util.SetFgStyle(menuTitle, util.GetPrimaryColor()) + util.SetFgStyle(tmp, lipgloss.BrightBlack)
-		} else {
-			menuName = util.SetNormalStyle(menuTitle) + util.SetFgStyle(tmp, lipgloss.BrightBlack)
+		currentWidth := 0
+		for i := indexStart; currentWidth < itemMaxLen-menuTitleLen; i = (i + 1) % len(r) {
+			rw := lipgloss.Width(string(r[i]))
+			if currentWidth+rw > itemMaxLen-menuTitleLen {
+				break
+			}
+			s = append(s, r[i])
+			currentWidth += rw
 		}
+		tmp = lipgloss.NewStyle().Width(itemMaxLen - menuTitleLen).MaxWidth(itemMaxLen - menuTitleLen).Render(string(s))
+		menuName = titleStyle.Render(menuTitle) + ss.Subtitle.Render(tmp)
 	} else {
-		tmp = runewidth.FillRight(m.menuList[index].Subtitle, itemMaxLen-menuTitleLen)
-		if isSelected {
-			menuName = util.SetFgStyle(menuTitle, util.GetPrimaryColor()) + util.SetFgStyle(tmp, lipgloss.BrightBlack)
-		} else {
-			menuName = util.SetNormalStyle(menuTitle) + util.SetFgStyle(tmp, lipgloss.BrightBlack)
-		}
+		tmp = lipgloss.NewStyle().
+			Width(itemMaxLen - menuTitleLen).
+			Render(m.menuList[index].Subtitle)
+		menuName = titleStyle.Render(menuTitle) + ss.Subtitle.Render(tmp)
 	}
 
 	menuItemBuilder.WriteString(menuName)
@@ -764,52 +785,162 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 	return menuItemBuilder.String(), itemMaxLen
 }
 
-func (m *Main) searchInputView(app *App, top *int) string {
-	if !m.inSearching {
-		*top++
-		return "\n"
+func (m *Main) menuLineView(a *App, line int) string {
+	var index int
+	if m.isDualColumn {
+		index = line*2 + m.getPageStartIndex()
+	} else {
+		index = line + m.getPageStartIndex()
+	}
+	if index >= len(m.menuList) {
+		return "" // beyond menu bounds — empty row
 	}
 
-	var (
-		builder     strings.Builder
-		windowWidth = app.WindowWidth()
-	)
-	builder.WriteString("\n")
-	*top++
+	menuItemStr, _ := m.menuItemView(a, index)
 
-	inputs := []textinput.Model{
-		m.searchInput,
-	}
-
-	var startColumn int
-	if m.menuStartColumn > 2 {
-		startColumn = m.menuStartColumn - 2
-	}
-	for i, input := range inputs {
-		if startColumn > 0 {
-			builder.WriteString(strings.Repeat(" ", startColumn))
-		}
-
-		builder.WriteString(input.View())
-
-		var valueLen int
-		if input.Value() == "" {
-			valueLen = runewidth.StringWidth(input.Placeholder)
+	var row string
+	if m.isDualColumn {
+		var secondMenuItemStr string
+		if index+1 < len(m.menuList) {
+			secondMenuItemStr, _ = m.menuItemView(a, index+1)
 		} else {
-			valueLen = runewidth.StringWidth(input.Value())
+			secondMenuItemStr = "" // last item has no second column
 		}
-		if spaceLen := windowWidth - startColumn - valueLen - 3; spaceLen > 0 {
-			builder.WriteString(strings.Repeat(" ", spaceLen))
-		}
+		// Fixed 4-space gap between columns
+		row = menuItemStr + "    " + secondMenuItemStr
+	} else {
+		row = menuItemStr
+	}
+	// Left-align row at menuStartColumn (offset by -4 to account for " => "/"    " prefix)
+	if m.menuStartColumn > 4 {
+		row = lipgloss.NewStyle().PaddingLeft(m.menuStartColumn - 4).Render(row)
+	}
+	return row
+}
 
-		*top++
+func (m *Main) getPageStartIndex() int {
+	return (m.menuCurPage - 1) * m.menuPageSize
+}
 
-		if i < len(inputs)-1 {
-			builder.WriteString("\n\n")
-			*top++
+func (m *Main) getMaxIndexWidth() int {
+	return int(math.Log10(float64((m.menuPageSize*m.menuCurPage)-1))) + 1
+}
+
+// backButtonWidth is the display width of the back button icon including padding.
+const backButtonWidth = 2 // "←"
+
+// menuTitleY returns the 0-indexed Y position of the menu title row in the
+// rendered output. Used for mouse hit-testing the back button.
+func (m *Main) menuTitleY() int {
+	y := m.computeTitleStartRow()
+	if m.options.WhetherDisplayTitle {
+		y++
+	}
+	return y
+}
+
+// isOverBackButton checks if the given screen position falls within the back
+// button area shown before the menu title when inside a submenu.
+func (m *Main) isOverBackButton(x, y int, _ *App) bool {
+	if m.menuStack.Len() <= 0 {
+		return false
+	}
+	if y != m.menuTitleY() {
+		return false
+	}
+	// The back icon "←" is rendered at column (menuStartColumn - backButtonWidth).
+	iconCol := m.menuStartColumn - backButtonWidth
+	return iconCol >= 0 && x >= iconCol && x < iconCol+backButtonWidth
+}
+
+// mouseInMenuArea checks if the given Y coordinate falls within the menu list bounds.
+func (m *Main) mouseInMenuArea(y int) bool {
+	return y >= m.menuListStartRow && y < m.menuBottomRow
+}
+
+// menuItemAt maps a screen (x, y) coordinate to a menuList index.
+// Returns -1 if the coordinate is outside any menu item.
+func (m *Main) menuItemAt(x, y int) int {
+	row := y - m.menuListStartRow
+	numCols := m.getNumColumns()
+
+	maxLines := m.menuPageSize
+	if m.isDualColumn {
+		maxLines = int(math.Ceil(float64(m.menuPageSize) / 2))
+	}
+	if row < 0 || row >= maxLines {
+		return -1
+	}
+
+	col := 0
+	if m.isDualColumn {
+		if m.options.CenterEverything {
+			// In centered mode, columns are centered — split at midpoint
+			if x > m.app.WindowWidth()/2 {
+				col = 1
+			}
+		} else {
+			// In left-aligned mode, columns start at menuStartColumn-4.
+			// The left column occupies up to leftItemWidth, then 4-space gap,
+			// then the right column.
+			leftItemWidth := 44
+			if m.app.WindowWidth() <= 88 {
+				leftItemWidth = (m.app.WindowWidth() - m.menuStartColumn - 4) / 2
+			}
+			splitX := m.menuStartColumn - 4 + leftItemWidth + 2
+			if x >= splitX {
+				col = 1
+			}
 		}
 	}
-	return builder.String()
+
+	idx := m.getPageStartIndex() + row*numCols + col
+	if idx < 0 || idx >= len(m.menuList) {
+		return -1
+	}
+	return idx
+}
+
+func (m *Main) isSelected(index int) bool {
+	return !m.inSearching && index == m.selectedIndex
+}
+
+func (m *Main) searchInputView(app *App) string {
+	var (
+		windowWidth = app.WindowWidth()
+		ss          = style.CurrentStyleSet()
+	)
+
+	if !m.inSearching {
+		// Help hint bar: shows per-menu keyboard shortcuts when search is inactive.
+		// Each Menu can override HelpHints() to customize the displayed shortcuts.
+		hints := m.menu.HelpHints()
+		if len(hints) == 0 {
+			return "" // menu opted out of help bar
+		}
+		var parts []string
+		for _, h := range hints {
+			parts = append(parts,
+				ss.HintKey.Render("  "+h.Key)+ss.Muted.Render(" "+h.Desc),
+			)
+		}
+		hint := layout.JoinHorizontal(layout.Top, parts...)
+		return lipgloss.NewStyle().
+			Width(windowWidth).
+			Align(lipgloss.Center).
+			PaddingTop(1).
+			Render(hint)
+	}
+
+	// Search input: left-aligned with menu, same row as the help bar.
+	inputView := m.searchInput.View()
+	inputView = lipgloss.NewStyle().
+		Width(windowWidth).
+		PaddingLeft(m.menuStartColumn).
+		PaddingTop(1).
+		Render(inputView)
+
+	return inputView
 }
 
 func (m *Main) getCurPageMenus() []MenuItem {
@@ -885,6 +1016,13 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 	case "G":
 		newPage = m.MoveBottom()
 	case "n", "N", "enter":
+		if m.selectedIndex < 0 {
+			break
+		}
+		// Check for custom action first; fall through to submenu if none.
+		if actionPage, actionCmd := m.menu.Action(m.app, m.selectedIndex); actionPage != nil || actionCmd != nil {
+			return actionPage, actionCmd
+		}
 		newPage = m.enterMenuWithLoading(nil, nil)
 		if m.pendingEnterMenu != nil {
 			return m, a.RerenderCmd(true)
@@ -908,6 +1046,9 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 
 // mouse handle
 func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
+	mouse := msg.Mouse()
+
+	// External controllers — run first, they have priority
 	var (
 		newPage         Page
 		lastCmd         tea.Cmd
@@ -919,13 +1060,200 @@ func (m *Main) mouseMsgHandle(msg tea.MouseMsg, a *App) (Page, tea.Cmd) {
 			break
 		}
 	}
-	if newPage != nil {
-		return newPage, func() tea.Msg { return newPage.Msg() }
+	if stopPropagation {
+		if newPage != nil {
+			return newPage, func() tea.Msg { return newPage.Msg() }
+		}
+		if lastCmd == nil {
+			lastCmd = a.Tick(time.Nanosecond)
+		}
+		return m, lastCmd
 	}
-	if lastCmd == nil {
-		lastCmd = a.Tick(time.Nanosecond)
+
+	// --- DEBUG: log all mouse click events ---
+	// if f, err := os.OpenFile("/tmp/foxful-mouse-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+	// 	inMenu := m.mouseInMenuArea(mouse.Y)
+	// 	log.New(f, "", log.LstdFlags|log.Lmicroseconds).Printf(
+	// 		"button=%-10s x=%-3d y=%-3d inMenu=%v searching=%v",
+	// 		mouse.Button.String(), mouse.X, mouse.Y, inMenu, m.inSearching,
+	// 	)
+	// 	f.Close()
+	// }
+	// --- END DEBUG ---
+
+	// Only process concrete message types for built-in menu handling.
+	// Bubbletea v2 sends both MouseClickMsg + MouseReleaseMsg per physical click;
+	// we must ignore MouseReleaseMsg to avoid false double-click detection.
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return m.mouseClickHandle(mouse, a)
+	case tea.MouseMotionMsg:
+		return m.mouseMotionHandle(mouse, a)
+	case tea.MouseReleaseMsg:
+		// Ignore — hover and pointer state are driven by mouseMotionHandle.
+		// Clearing them here would flicker the pointer when clicking a menu
+		// item (mouse still over clickable area after release).
+		return m, a.Tick(time.Nanosecond)
+	case tea.MouseWheelMsg:
+		return m.mouseWheelHandle(mouse, a)
 	}
-	return m, lastCmd
+
+	// Nothing handled — tick to keep the event loop alive
+	return m, a.Tick(time.Nanosecond)
+}
+
+// mouseClickHandle processes mouse click events for the built-in menu.
+func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
+	if m.inSearching {
+		return m, a.Tick(time.Nanosecond)
+	}
+
+	switch mouse.Button {
+	case tea.MouseLeft:
+		// Check back button click (navigate back to parent menu)
+		if m.isOverBackButton(mouse.X, mouse.Y, a) {
+			newPage := m.BackMenu()
+			if newPage != nil {
+				return newPage, a.RerenderCmd(true)
+			}
+			return m, a.RerenderCmd(true)
+		}
+
+		// Check menu area click (existing behavior)
+		if m.mouseInMenuArea(mouse.Y) {
+			idx := m.menuItemAt(mouse.X, mouse.Y)
+			if idx < 0 || idx >= len(m.menuList) {
+				break
+			}
+
+			now := time.Now()
+			doubleClickInterval := m.doubleClickInterval()
+
+			// Position tolerance (±2px)
+			deltaX := mouse.X - m.lastClickX
+			if deltaX < 0 {
+				deltaX = -deltaX
+			}
+			deltaY := mouse.Y - m.lastClickY
+			if deltaY < 0 {
+				deltaY = -deltaY
+			}
+
+			// Double-click: within interval AND close position
+			if now.Sub(m.lastClickTime) <= doubleClickInterval &&
+				deltaX <= 2 && deltaY <= 2 {
+				// Double-click → enter submenu or execute custom action
+				m.selectedIndex = idx
+				m.lastClickTime = time.Time{} // reset
+
+				// Check for custom action first; fall through to submenu if none.
+				if actionPage, actionCmd := m.menu.Action(m.app, m.selectedIndex); actionPage != nil || actionCmd != nil {
+					return actionPage, actionCmd
+				}
+
+				newPage := m.enterMenuWithLoading(nil, nil)
+				if m.pendingEnterMenu != nil {
+					return m, a.RerenderCmd(true)
+				}
+				if newPage != nil {
+					return newPage, nil
+				}
+				// No submenu — stay on current page
+				return m, a.RerenderCmd(true)
+			}
+
+			// Single click → just focus/select, never enter
+			m.selectedIndex = idx
+			m.lastClickTime = now
+			m.lastClickX = mouse.X
+			m.lastClickY = mouse.Y
+			return m, a.RerenderCmd(true)
+		}
+
+		// Check status bar breadcrumb click
+		if newPage := m.handleBreadcrumbClick(mouse.X, mouse.Y, a); newPage != nil {
+			return newPage, a.RerenderCmd(true)
+		}
+
+	case tea.MouseBackward:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		// Back button: return to parent menu
+		newPage := m.BackMenu()
+		if newPage != nil {
+			return newPage, a.RerenderCmd(true)
+		}
+		return m, a.RerenderCmd(true)
+
+	case tea.MouseForward:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		// Forward button: enter selected item's submenu
+		newPage := m.enterMenuWithLoading(nil, nil)
+		if m.pendingEnterMenu != nil {
+			return m, a.RerenderCmd(true)
+		}
+		if newPage != nil {
+			return newPage, nil
+		}
+		return m, a.RerenderCmd(true)
+
+	case tea.MouseMiddle:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		newPage := m.BackMenu()
+		if newPage != nil {
+			return newPage, a.RerenderCmd(true)
+		}
+		return m, a.RerenderCmd(true)
+	}
+
+	return m, a.Tick(time.Nanosecond)
+}
+
+// mouseWheelHandle processes mouse wheel events for the built-in menu.
+func (m *Main) mouseWheelHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
+	if m.inSearching {
+		return m, a.Tick(time.Nanosecond)
+	}
+
+	switch mouse.Button {
+	case tea.MouseWheelUp:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		newPage := m.MoveUp()
+		if newPage != nil {
+			return newPage, a.RerenderCmd(true)
+		}
+		return m, a.RerenderCmd(true)
+	case tea.MouseWheelDown:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		newPage := m.MoveDown()
+		if newPage != nil {
+			return newPage, a.RerenderCmd(true)
+		}
+		return m, a.RerenderCmd(true)
+	}
+
+	return m, a.Tick(time.Nanosecond)
+}
+
+// doubleClickInterval returns the OS-specific double-click interval threshold.
+func (m *Main) doubleClickInterval() time.Duration {
+	switch runtime.GOOS {
+	case "darwin":
+		return 400 * time.Millisecond
+	case "windows":
+		return 500 * time.Millisecond
+	default:
+		return 300 * time.Millisecond
+	}
 }
 
 func (m *Main) searchMenuHandle() {
@@ -998,6 +1326,11 @@ func (m *Main) MoveDown() Page {
 		newPage    Page
 		res        bool
 	)
+	// Initial state: no item selected — select first item
+	if m.selectedIndex < 0 {
+		m.selectedIndex = 0
+		return nil
+	}
 	if m.isDualColumn {
 		if m.selectedIndex+2 > len(m.menuList)-1 && bottomHook != nil {
 			loading := NewLoading(m)
@@ -1111,6 +1444,7 @@ func (m *Main) PrePage() Page {
 		return nil
 	}
 	m.menuCurPage--
+	m.hoveredMenuItemIdx = -1
 	return newPage
 }
 
@@ -1133,6 +1467,7 @@ func (m *Main) NextPage() Page {
 	}
 
 	m.menuCurPage++
+	m.hoveredMenuItemIdx = -1
 	return newPage
 }
 
@@ -1152,13 +1487,17 @@ func (m *Main) enterMenuWithLoading(newMenu Menu, newTitle *MenuItem) Page {
 	if newMenu == nil {
 		newMenu = m.menu.SubMenu(m.app, m.selectedIndex)
 	}
-	if newTitle == nil && m.selectedIndex < len(m.menuList) {
+	if newTitle == nil && m.selectedIndex >= 0 && m.selectedIndex < len(m.menuList) {
 		newTitle = &m.menuList[m.selectedIndex]
 	}
 
 	if newMenu == nil || newTitle == nil {
 		return nil
 	}
+
+	m.hoveredBreadcrumbIdx = -1
+	m.hoveredMenuItemIdx = -1
+	m.hoveredBackButton = false
 
 	stackItem := &menuStackItem{
 		menuList:      m.menuList,
@@ -1191,8 +1530,14 @@ func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) Page {
 		newMenu = m.menu.SubMenu(m.app, m.selectedIndex)
 	}
 	if newTitle == nil {
-		newTitle = &m.menuList[m.selectedIndex]
+		if m.selectedIndex >= 0 {
+			newTitle = &m.menuList[m.selectedIndex]
+		}
 	}
+
+	m.hoveredBreadcrumbIdx = -1
+	m.hoveredMenuItemIdx = -1
+	m.hoveredBackButton = false
 
 	stackItem := &menuStackItem{
 		menuList:      m.menuList,
@@ -1242,6 +1587,10 @@ func (m *Main) BackMenu() Page {
 		return nil
 	}
 
+	m.hoveredBreadcrumbIdx = -1
+	m.hoveredMenuItemIdx = -1
+	m.hoveredBackButton = false
+
 	var (
 		stackItem = m.menuStack.Pop()
 		newPage   Page
@@ -1272,6 +1621,244 @@ func (m *Main) BackMenu() Page {
 	m.menuCurPage = stackMenu.menuCurPage
 
 	return newPage
+}
+
+// BackToMenu pops count levels from the menu stack (or until the stack is
+// empty). The current menu's BeforeBackMenuHook is called first; intermediate
+// menus that are skipped over do NOT get their hooks called. Must only be
+// called from the mouse click handler after hit-testing breadcrumb segments.
+func (m *Main) BackToMenu(count int) Page {
+	if count <= 0 {
+		return nil
+	}
+	if m.menuStack.Len() <= 0 {
+		return nil
+	}
+
+	m.hoveredBreadcrumbIdx = -1
+	m.hoveredMenuItemIdx = -1
+	m.hoveredBackButton = false
+
+	// Call hook on the current (deepest) menu once
+	var newPage Page
+	if backMenuHook := m.menu.BeforeBackMenuHook(); backMenuHook != nil {
+		loading := NewLoading(m)
+		loading.Start()
+		var res bool
+		if res, newPage = backMenuHook(m); !res {
+			loading.Complete()
+			// Hook refused — don't pop anything
+			if newPage == nil {
+				return nil
+			}
+			return newPage
+		}
+		loading.Complete()
+	}
+	m.menu.FormatMenuItem(m.menuTitle)
+
+	// Pop count levels, keeping the last popped item as the target state.
+	var targetStackItem *menuStackItem
+	for i := 0; i < count; i++ {
+		if m.menuStack.Len() <= 0 {
+			break
+		}
+		item := m.menuStack.Pop()
+		if si, ok := item.(*menuStackItem); ok {
+			targetStackItem = si
+		}
+	}
+	if targetStackItem == nil {
+		return nil
+	}
+
+	// Restore the target state
+	m.menuList = targetStackItem.menuList
+	m.menu = targetStackItem.menu
+	m.menuTitle = targetStackItem.menuTitle
+	m.menu.FormatMenuItem(m.menuTitle)
+	m.selectedIndex = targetStackItem.selectedIndex
+	m.menuCurPage = targetStackItem.menuCurPage
+
+	return newPage
+}
+
+// breadcrumbSegmentAt returns the breadcrumb segment display index and depth
+// index at the given screen position (x, y). Returns (-1, 0, false) when no
+// clickable ancestor segment is at that position. Only works for
+// DefaultStatusBar layout — returns false for other status bars.
+func (m *Main) breadcrumbSegmentAt(x, y int, a *App) (segIdx int, depthIdx int, ok bool) {
+	if m.menuStack.Len() <= 0 {
+		return -1, 0, false
+	}
+	if m.statusBar == nil {
+		return -1, 0, false
+	}
+	if _, ok := m.statusBar.(*DefaultStatusBar); !ok {
+		return -1, 0, false
+	}
+
+	// Status bar occupies the last rows (DefaultStatusBar is single-row).
+	h := a.WindowHeight()
+	if y < h-1 {
+		return -1, 0, false
+	}
+
+	segments := computeBreadcrumbSegments(m)
+	if len(segments) == 0 {
+		return -1, 0, false
+	}
+
+	ss := style.CurrentStyleSet()
+	pathLabel := ss.StatusBarNuggetLabel.Render(" » ")
+	labelW := lipgloss.Width(pathLabel)
+	segStartX := labelW + 1
+
+	for i, seg := range segments {
+		if seg.IsEllipsis {
+			segStartX += seg.DisplayWidth + 3
+			continue
+		}
+		if seg.IsLast {
+			break
+		}
+
+		segEndX := segStartX + seg.DisplayWidth
+		if x >= segStartX && x < segEndX {
+			return i, seg.DepthIndex, true
+		}
+
+		segStartX = segEndX + 3 // " / " = 3 chars
+	}
+
+	return -1, 0, false
+}
+
+// isOverClickableElement returns true if the given screen position is over
+// an interactive/clickable element that should show a pointer cursor.
+func (m *Main) isOverClickableElement(x, y int, a *App) bool {
+	// 1. Back button (clickable to navigate back to parent menu)
+	if m.isOverBackButton(x, y, a) {
+		return true
+	}
+
+	// 2. Breadcrumb ancestor segment (clickable to navigate back)
+	if _, _, ok := m.breadcrumbSegmentAt(x, y, a); ok {
+		return true
+	}
+
+	// 3. Menu list area (single-click selects, double-click enters)
+	if !m.inSearching && m.mouseInMenuArea(y) {
+		idx := m.menuItemAt(x, y)
+		if idx >= 0 && idx < len(m.menuList) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mouseMotionHandle processes mouse motion events for hover effects and
+// terminal mouse pointer shape changes. It updates both the breadcrumb
+// hover rendering state and the global pointer cursor.
+func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
+	oldBreadcrumbHover := m.hoveredBreadcrumbIdx
+	oldPointerActive := m.hoverPointerActive
+	oldBackButtonHover := m.hoveredBackButton
+
+	if m.inSearching {
+		stateChanged := false
+		if oldBreadcrumbHover != -1 {
+			m.hoveredBreadcrumbIdx = -1
+			stateChanged = true
+		}
+		if m.hoveredMenuItemIdx != -1 {
+			m.hoveredMenuItemIdx = -1
+			stateChanged = true
+		}
+		if m.hoveredBackButton {
+			m.hoveredBackButton = false
+			stateChanged = true
+		}
+		if oldPointerActive {
+			m.hoverPointerActive = false
+			stateChanged = true
+		}
+		if stateChanged {
+			return m, tea.Sequence(a.RerenderCmd(true), a.SetMousePointer("default"))
+		}
+		return m, nil
+	}
+
+	// Update breadcrumb hover (visual underline effect)
+	segIdx, _, bcOk := m.breadcrumbSegmentAt(mouse.X, mouse.Y, a)
+	if bcOk {
+		m.hoveredBreadcrumbIdx = segIdx
+	} else {
+		m.hoveredBreadcrumbIdx = -1
+	}
+
+	// Update menu item hover
+	oldMenuItemHover := m.hoveredMenuItemIdx
+	if !m.inSearching && m.mouseInMenuArea(mouse.Y) {
+		idx := m.menuItemAt(mouse.X, mouse.Y)
+		if idx >= 0 && idx < len(m.menuList) {
+			m.hoveredMenuItemIdx = idx
+		} else {
+			m.hoveredMenuItemIdx = -1
+		}
+	} else {
+		m.hoveredMenuItemIdx = -1
+	}
+
+	// Update back button hover
+	m.hoveredBackButton = m.isOverBackButton(mouse.X, mouse.Y, a)
+
+	// Update global pointer state
+	m.hoverPointerActive = m.isOverClickableElement(mouse.X, mouse.Y, a)
+
+	// Compute commands for state changes
+	var cmds []tea.Cmd
+	if m.hoveredBreadcrumbIdx != oldBreadcrumbHover || m.hoveredMenuItemIdx != oldMenuItemHover || m.hoveredBackButton != oldBackButtonHover {
+		cmds = append(cmds, a.RerenderCmd(true))
+	}
+	if m.hoverPointerActive != oldPointerActive {
+		if m.hoverPointerActive {
+			cmds = append(cmds, a.SetMousePointer("pointer"))
+		} else {
+			cmds = append(cmds, a.SetMousePointer("default"))
+		}
+	}
+
+	if len(cmds) > 0 {
+		return m, tea.Sequence(cmds...)
+	}
+	return m, nil
+}
+
+// handleBreadcrumbClick handles a left-click on the status bar breadcrumb.
+// Navigates back to the clicked menu level. Returns nil if no clickable
+// breadcrumb segment was hit.
+func (m *Main) handleBreadcrumbClick(x, y int, a *App) Page {
+	_, depthIdx, ok := m.breadcrumbSegmentAt(x, y, a)
+	if !ok {
+		return nil
+	}
+
+	// Compute full path length for pop count
+	fullPathLen := m.menuStack.Len()
+	if m.menuStack.Len() > 0 {
+		stackItems := m.menuStack.ToSlice()
+		lastItem := stackItems[len(stackItems)-1].(*menuStackItem)
+		if lastItem.menuTitle.Title != m.menuTitle.Title {
+			fullPathLen++
+		}
+	} else {
+		fullPathLen = 1
+	}
+
+	popCount := fullPathLen - 1 - depthIdx
+	return m.BackToMenu(popCount)
 }
 
 func TickMain(duration time.Duration) tea.Cmd {

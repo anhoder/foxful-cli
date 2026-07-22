@@ -94,7 +94,10 @@ func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 }
 
 func main() {
-	var app = model.NewApp(model.DefaultOptions())
+	opts := model.DefaultOptions()
+	opts.StatusBar = &model.DefaultStatusBar{}
+	// opts.DynamicRowCount = true
+	app := model.NewApp(opts)
 	app.With(model.WithMainMenu(mainMenu, nil))
 
 	fmt.Println(app.Run())

@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"image/color"
 	"math"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/anhoder/foxful-cli/layout"
+	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
 	"github.com/fogleman/ease"
 )
@@ -82,85 +82,53 @@ func (s *StartupPage) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 }
 
 func (s *StartupPage) View(a *App) string {
-	var windowHeight, windowWidth = a.WindowHeight(), a.WindowWidth()
+	windowWidth, windowHeight := a.WindowWidth(), a.WindowHeight()
 	if windowWidth <= 0 || windowHeight <= 0 {
 		return ""
 	}
 
-	blankLine := 1
-	tipsHeight := 1
-	progressHeight := 1
-	height := util.AsciiHeight + blankLine + tipsHeight + blankLine + progressHeight
-	var top, bottom int
-	if windowHeight-height > 0 {
-		top = (windowHeight - height) / 2
-	}
-	if windowHeight-top-height > 0 {
-		bottom = windowHeight - top - height
-	}
+	content := layout.JoinVertical(
+		lipgloss.Center,
+		s.logoView(a),
+		"",
+		s.tipsView(a),
+		"",
+		s.progressView(a),
+	)
 
-	var uiBuilder strings.Builder
-	if top > 1 {
-		uiBuilder.WriteString(strings.Repeat("\n", top-1))
-	}
-	uiBuilder.WriteString(s.logoView(a))
-	uiBuilder.WriteString("\n")
-	if top != 0 && bottom != 0 {
-		uiBuilder.WriteString("\n")
-	}
-	uiBuilder.WriteString(s.tipsView(a))
-	uiBuilder.WriteString("\n")
-	if top != 0 && bottom != 0 {
-		uiBuilder.WriteString("\n")
-	}
-	uiBuilder.WriteString(s.progressView(a))
-	uiBuilder.WriteString(strings.Repeat("\n", bottom))
-
-	return uiBuilder.String()
+	return layout.Place(
+		windowWidth, windowHeight,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
 }
 
 func (s *StartupPage) logoView(a *App) string {
-	var windowHeight, windowWidth = a.WindowHeight(), a.WindowWidth()
-	if windowWidth <= 0 || windowHeight <= 0 {
+	windowWidth := a.WindowWidth()
+	if windowWidth <= 0 {
 		return ""
 	}
 
 	originLogo := util.GetAlphaAscii(s.options.Welcome)
-	var logoWidth int
-	if logoArr := strings.Split(originLogo, "\n"); len(logoArr) > 1 {
-		logoWidth = utf8.RuneCountInString(logoArr[1])
-	}
-
-	var left int
-	if windowWidth-logoWidth > 0 {
-		left = (windowWidth - logoWidth) / 2
-	}
-
-	var logoBuilder strings.Builder
-	leftSpace := strings.Repeat(" ", left)
-	lines := strings.Split(originLogo, "\n")
-	for _, line := range lines {
-		logoBuilder.WriteString(leftSpace)
-		logoBuilder.WriteString(line)
-		logoBuilder.WriteString("\n")
-	}
-	return util.SetFgStyle(logoBuilder.String(), util.GetPrimaryColor())
+	return lipgloss.NewStyle().
+		Align(lipgloss.Center).
+		Width(windowWidth).
+		Foreground(util.GetPrimaryColor()).
+		Render(originLogo)
 }
 
 func (s *StartupPage) tipsView(a *App) string {
-	example := "Enter after 11.1 seconds..."
-	var (
-		left        int
-		windowWidth = a.WindowWidth()
-	)
-	if windowWidth-len(example) > 0 {
-		left = (windowWidth - len(example)) / 2
+	windowWidth := a.WindowWidth()
+	if windowWidth <= 0 {
+		return ""
 	}
-	tips := fmt.Sprintf("%sEnter after %.1f seconds...",
-		strings.Repeat(" ", left),
-		float64(s.options.LoadingDuration-s.loadedDuration)/float64(time.Second))
 
-	return util.SetFgStyle(tips, lipgloss.BrightBlack)
+	tips := fmt.Sprintf("Enter after %.1f seconds...",
+		float64(s.options.LoadingDuration-s.loadedDuration)/float64(time.Second))
+	return style.CurrentStyleSet().Subtitle.Copy().
+		Align(lipgloss.Center).
+		Width(windowWidth).
+		Render(tips)
 }
 
 func (s *StartupPage) progressView(a *App) string {

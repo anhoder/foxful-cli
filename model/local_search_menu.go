@@ -32,17 +32,13 @@ func (m *LocalSearchMenuImpl) MenuViews() []MenuItem {
 	var (
 		items []MenuItem
 		menus = m.Menu.MenuViews()
+		seen  = make(map[int]bool, len(m.resItems))
 	)
 	for _, v := range m.resItems {
-		// matchedMap := lo.Associate(v.MatchedIndexes, func(i int) (int, bool) { return i, true })
-		// titleRune := []rune(menu.Title)
-		// for i := 0; i < len(titleRune); i++ {
-		// 	if matchedMap[i] {
-		// 		fmt.Print(fmt.Sprintf(bold, string(match.Str[i])))
-		// 	} else {
-		// 		fmt.Print(string(match.Str[i]))
-		// 	}
-		// }
+		if seen[v.Index] {
+			continue
+		}
+		seen[v.Index] = true
 		items = append(items, menus[v.Index])
 	}
 	return items

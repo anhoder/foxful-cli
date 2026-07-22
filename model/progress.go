@@ -4,8 +4,7 @@ import (
 	"image/color"
 	"strings"
 
-	"charm.land/lipgloss/v2"
-	"github.com/anhoder/foxful-cli/util"
+	"github.com/anhoder/foxful-cli/style"
 )
 
 type ProgressOptions struct {
@@ -22,15 +21,14 @@ type ProgressOptions struct {
 func Progress(options *ProgressOptions, width, fullSize int, progressRamp []color.Color) string {
 	var fullCells strings.Builder
 	for i := 0; i < fullSize && i < len(progressRamp); i++ {
-		style := lipgloss.NewStyle().Foreground(progressRamp[i])
 		if i == 0 {
-			fullCells.WriteString(style.Render(string(options.FullCharWhenFirst)))
+			fullCells.WriteString(style.FG(string(options.FullCharWhenFirst), progressRamp[i]))
 		} else if i >= width-1 {
-			fullCells.WriteString(style.Render(string(options.FullCharWhenLast)))
+			fullCells.WriteString(style.FG(string(options.FullCharWhenLast), progressRamp[i]))
 		} else if i == fullSize-1 {
-			fullCells.WriteString(style.Render(string(options.LastFullChar)))
+			fullCells.WriteString(style.FG(string(options.LastFullChar), progressRamp[i]))
 		} else {
-			fullCells.WriteString(style.Render(string(options.FullChar)))
+			fullCells.WriteString(style.FG(string(options.FullChar), progressRamp[i]))
 		}
 	}
 
@@ -54,5 +52,5 @@ func Progress(options *ProgressOptions, width, fullSize int, progressRamp []colo
 			emptyCells.WriteRune(options.EmptyCharWhenLast)
 		}
 	}
-	return fullCells.String() + util.SetFgStyle(emptyCells.String(), lipgloss.BrightBlack)
+	return fullCells.String() + style.CurrentStyleSet().ProgressEmpty.Render(emptyCells.String())
 }

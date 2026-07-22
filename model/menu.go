@@ -3,8 +3,8 @@ package model
 import (
 	"time"
 
-	"charm.land/lipgloss/v2"
-	"github.com/anhoder/foxful-cli/util"
+	tea "charm.land/bubbletea/v2"
+	"github.com/anhoder/foxful-cli/style"
 )
 
 type Hook func(main *Main) (bool, Page)
@@ -25,7 +25,14 @@ func (item *MenuItem) String() string {
 	if item.Subtitle == "" {
 		return item.Title
 	}
-	return item.Title + " " + util.SetFgStyle(item.Subtitle, lipgloss.BrightBlack)
+	return item.Title + " " + style.CurrentStyleSet().Subtitle.Render(item.Subtitle)
+}
+
+// HelpHint describes a single keyboard shortcut displayed in the help bar
+// below the menu list. Each menu can customize the hints shown for its context.
+type HelpHint struct {
+	Key  string // e.g. "↑↓/jk", "enter", "/"
+	Desc string // e.g. "navigate", "confirm", "search"
 }
 
 // Menu menu interface
@@ -47,6 +54,18 @@ type Menu interface {
 
 	// SubMenu obtain menu by index
 	SubMenu(app *App, index int) Menu
+
+	// Action is called when the user activates a menu item (Enter/double-click).
+	// If it returns a non-nil Page or Cmd, the action is executed and submenu
+	// navigation is skipped. Return (nil, nil) to fall through to SubMenu.
+	//
+	// Use cases: show a popup, write a log, trigger a side effect, or any
+	// arbitrary action that should not navigate to a submenu.
+	Action(app *App, index int) (Page, tea.Cmd)
+
+	// HelpHints returns the keyboard shortcuts to display in the help bar
+	// below the menu list. Return nil to hide the help bar for this menu.
+	HelpHints() []HelpHint
 
 	// BeforePrePageHook Hook before turn to previous page
 	BeforePrePageHook() Hook
@@ -72,8 +91,7 @@ type LocalSearchMenu interface {
 	Search(menu Menu, search string)
 }
 
-type DefaultMenu struct {
-}
+type DefaultMenu struct{}
 
 func (e *DefaultMenu) IsSearchable() bool {
 	return false
@@ -96,6 +114,22 @@ func (e *DefaultMenu) FormatMenuItem(_ *MenuItem) {
 
 func (e *DefaultMenu) SubMenu(_ *App, _ int) Menu {
 	return nil
+}
+
+func (e *DefaultMenu) Action(_ *App, _ int) (Page, tea.Cmd) {
+	return nil, nil
+}
+
+// HelpHints returns a default set of keyboard shortcuts.
+// Individual menus can override this to provide context-specific hints.
+func (e *DefaultMenu) HelpHints() []HelpHint {
+	return []HelpHint{
+		{Key: "↑↓/jk", Desc: "navigate"},
+		{Key: "n/enter", Desc: "confirm"},
+		{Key: "/", Desc: "search"},
+		{Key: "b/esc", Desc: "back"},
+		{Key: "q", Desc: "quit"},
+	}
 }
 
 func (e *DefaultMenu) BeforePrePageHook() Hook {
@@ -173,7 +207,11 @@ func (d *defaultTicker) Ticker() <-chan time.Time {
 }
 
 func (d *defaultTicker) PassedTime() time.Duration {
-	// ignore data race at d.t
+	// Before the first tick arrives, d.t is zero-valued.
+	// Return 0 to prevent downstream code from computing negative indices.
+	if d.t.IsZero() {
+		return 0
+	}
 	return d.t.Sub(d.startTime)
 }
 

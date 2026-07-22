@@ -7,12 +7,32 @@ charm.land/bubbles/v2/textinput
 # charm.land/bubbletea/v2 v2.0.8 => github.com/go-musicfox/bubbletea/v2 v2.0.8-foxful-1.2
 ## explicit; go 1.25.0
 charm.land/bubbletea/v2
-# charm.land/lipgloss/v2 v2.0.2
+# charm.land/glamour/v2 v2.0.1
+## explicit; go 1.25.8
+charm.land/glamour/v2
+charm.land/glamour/v2/ansi
+charm.land/glamour/v2/internal/autolink
+charm.land/glamour/v2/styles
+# charm.land/lipgloss/v2 v2.0.4
 ## explicit; go 1.25.0
 charm.land/lipgloss/v2
+charm.land/lipgloss/v2/table
+# github.com/alecthomas/chroma/v2 v2.14.0
+## explicit; go 1.19
+github.com/alecthomas/chroma/v2
+github.com/alecthomas/chroma/v2/formatters
+github.com/alecthomas/chroma/v2/formatters/html
+github.com/alecthomas/chroma/v2/formatters/svg
+github.com/alecthomas/chroma/v2/lexers
+github.com/alecthomas/chroma/v2/quick
+github.com/alecthomas/chroma/v2/styles
 # github.com/atotto/clipboard v0.1.4
 ## explicit
 github.com/atotto/clipboard
+# github.com/aymerick/douceur v0.2.0
+## explicit
+github.com/aymerick/douceur/css
+github.com/aymerick/douceur/parser
 # github.com/charmbracelet/colorprofile v0.4.3
 ## explicit; go 1.25.0
 github.com/charmbracelet/colorprofile
@@ -24,6 +44,9 @@ github.com/charmbracelet/ultraviolet
 github.com/charmbracelet/x/ansi
 github.com/charmbracelet/x/ansi/kitty
 github.com/charmbracelet/x/ansi/parser
+# github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf
+## explicit; go 1.19
+github.com/charmbracelet/x/exp/slice
 # github.com/charmbracelet/x/term v0.2.2
 ## explicit; go 1.24.0
 github.com/charmbracelet/x/term
@@ -39,6 +62,10 @@ github.com/clipperhouse/displaywidth
 # github.com/clipperhouse/uax29/v2 v2.7.0
 ## explicit; go 1.18
 github.com/clipperhouse/uax29/v2/graphemes
+# github.com/dlclark/regexp2 v1.11.0
+## explicit; go 1.13
+github.com/dlclark/regexp2
+github.com/dlclark/regexp2/syntax
 # github.com/ebitengine/purego v0.10.1
 ## explicit; go 1.18
 github.com/ebitengine/purego
@@ -49,6 +76,9 @@ github.com/ebitengine/purego/internal/xreflect
 # github.com/fogleman/ease v0.0.0-20170301025033-8da417bf1776
 ## explicit
 github.com/fogleman/ease
+# github.com/gorilla/css v1.0.1
+## explicit; go 1.20
+github.com/gorilla/css/scanner
 # github.com/jezek/xgb v1.3.1
 ## explicit; go 1.11
 github.com/jezek/xgb
@@ -60,6 +90,10 @@ github.com/lucasb-eyer/go-colorful
 # github.com/mattn/go-runewidth v0.0.23
 ## explicit; go 1.20
 github.com/mattn/go-runewidth
+# github.com/microcosm-cc/bluemonday v1.0.27
+## explicit; go 1.19
+github.com/microcosm-cc/bluemonday
+github.com/microcosm-cc/bluemonday/css
 # github.com/muesli/cancelreader v0.2.2
 ## explicit; go 1.17
 github.com/muesli/cancelreader
@@ -81,6 +115,26 @@ github.com/vcaesar/keycode
 # github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e
 ## explicit; go 1.19
 github.com/xo/terminfo
+# github.com/yuin/goldmark v1.7.8
+## explicit; go 1.19
+github.com/yuin/goldmark
+github.com/yuin/goldmark/ast
+github.com/yuin/goldmark/extension
+github.com/yuin/goldmark/extension/ast
+github.com/yuin/goldmark/parser
+github.com/yuin/goldmark/renderer
+github.com/yuin/goldmark/renderer/html
+github.com/yuin/goldmark/text
+github.com/yuin/goldmark/util
+# github.com/yuin/goldmark-emoji v1.0.5
+## explicit; go 1.15
+github.com/yuin/goldmark-emoji
+github.com/yuin/goldmark-emoji/ast
+github.com/yuin/goldmark-emoji/definition
+# golang.org/x/net v0.39.0
+## explicit; go 1.23.0
+golang.org/x/net/html
+golang.org/x/net/html/atom
 # golang.org/x/sync v0.21.0
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
@@ -88,3 +142,13 @@ golang.org/x/sync/errgroup
 ## explicit; go 1.25.0
 golang.org/x/sys/unix
 golang.org/x/sys/windows
+# golang.org/x/text v0.24.0
+## explicit; go 1.23.0
+golang.org/x/text/cases
+golang.org/x/text/internal
+golang.org/x/text/internal/language
+golang.org/x/text/internal/language/compact
+golang.org/x/text/internal/tag
+golang.org/x/text/language
+golang.org/x/text/transform
+golang.org/x/text/unicode/norm

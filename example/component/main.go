@@ -3,13 +3,12 @@ package main
 import (
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/anhoder/foxful-cli/model"
-	"github.com/anhoder/foxful-cli/util"
+	"github.com/anhoder/foxful-cli/style"
 )
 
 var (
@@ -134,19 +133,15 @@ func NewComponent1(app *model.App) *Component1 {
 func (p *Component1) Update(_ tea.Msg, _ *model.App) {
 }
 
-func (p *Component1) View(_ *model.App, main *model.Main) (string, int) {
-	var (
-		builder strings.Builder
-		t       = time.Now()
-	)
-	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line1: "+strconv.Itoa(t.Hour())+"h\n", lipgloss.BrightBlue))
-	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line2: "+strconv.Itoa(t.Minute())+"m\n", lipgloss.BrightCyan))
-	builder.WriteString(strings.Repeat(" ", main.MenuStartColumn()))
-	builder.WriteString(util.SetFgStyle("line3: "+strconv.Itoa(t.Second())+"s", lipgloss.BrightYellow))
+func (p *Component1) View(app *model.App, main *model.Main) (string, int) {
+	t := time.Now()
+	center := lipgloss.NewStyle().Width(app.WindowWidth()).Align(lipgloss.Center)
 
-	return builder.String(), 3
+	line1 := center.Render(style.FG("line1: "+strconv.Itoa(t.Hour())+"h", lipgloss.BrightBlue))
+	line2 := center.Render(style.FG("line2: "+strconv.Itoa(t.Minute())+"m", lipgloss.BrightCyan))
+	line3 := center.Render(style.FG("line3: "+strconv.Itoa(t.Second())+"s", lipgloss.BrightYellow))
+
+	return lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3), 3
 }
 
 func main() {
