@@ -5,3 +5,9 @@ gen
 .DS_Store
 .vscode/
 go.sum
+# compiled examples
+markdown
+menu
+popup
+theme
+foxful-cli
