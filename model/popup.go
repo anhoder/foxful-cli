@@ -85,6 +85,8 @@ type Popup struct {
 	y      int // vertical position on screen
 	width  int // visual width
 	height int // visual height
+
+
 }
 
 // NewInfoPopup creates an informational popup with an "OK" button.
@@ -233,7 +235,6 @@ func (p *Popup) ConsumeResult() *PopupResult {
 // Render returns the popup rendered as a lipgloss-styled box.
 // Uses Dialog-style compositing: JoinVertical(Center, ...) + JoinHorizontal(Top, buttons).
 func (p *Popup) Render(styles style.StyleSet) string {
-
 	// Render title and buttons first so we can measure their height
 	var titleStr, buttonStr string
 	var titleLines, buttonLines int
@@ -501,7 +502,6 @@ func (p *Popup) HandleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 				return true, hoverCmd
 			}
 
-			// Check if clicking a button
 			if btnIdx := p.buttonAt(mouse.X, mouse.Y); btnIdx >= 0 {
 				p.focusedButton = btnIdx
 				btn := p.Buttons[btnIdx]

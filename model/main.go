@@ -15,6 +15,7 @@ import (
 	"github.com/anhoder/foxful-cli/layout"
 	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
+	"github.com/mattn/go-runewidth"
 )
 
 type Main struct {
@@ -227,12 +228,23 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 			m.menuStartRow--
 		}
 		if m.isDualColumn {
-			m.menuStartColumn = msg.Width / 6
+			switch {
+			case msg.Width < 100:
+				m.menuStartColumn = msg.Width / 5
+			case msg.Width < 150:
+				m.menuStartColumn = msg.Width / 4
+			default:
+				m.menuStartColumn = msg.Width / 3
+			}
 		} else {
-			m.menuStartColumn = msg.Width / 4
+			if msg.Width < 100 {
+				m.menuStartColumn = msg.Width / 3
+			} else {
+				m.menuStartColumn = msg.Width * 2 / 5
+			}
 		}
-		if m.menuStartColumn < 2 {
-			m.menuStartColumn = 2
+		if m.menuStartColumn < 5 {
+			m.menuStartColumn = 5
 		}
 
 		bottomHeight := 13
@@ -694,6 +706,25 @@ func (m *Main) menuListView(a *App) string {
 	return menuListBuilder.String()
 }
 
+// truncateVisualWidth truncates s to fit within maxWidth visual cells,
+// handling CJK characters (width 2) and other wide runes correctly.
+// Returns the original string if it already fits.
+func truncateVisualWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	var width int
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if width+rw > maxWidth {
+			return string(runes[:i])
+		}
+		width += rw
+	}
+	return s
+}
+
 func (m *Main) menuItemView(a *App, index int) (string, int) {
 	var (
 		menuItemBuilder strings.Builder
@@ -747,14 +778,10 @@ func (m *Main) menuItemView(a *App, index int) (string, int) {
 
 	var tmp string
 	if menuTitleLen > itemMaxLen {
-		// Title too long — truncate the whole line uniformly.
-		// Cannot split prefix/title styling here since the boundary
-		// may fall mid-title.
-		tmp = lipgloss.NewStyle().
-			Width(itemMaxLen).
-			MaxWidth(itemMaxLen).
-			Render(menuTitle)
-		menuName = titleStyle.Render(tmp)
+		// Title too long — manually truncate to visual width to avoid
+		// line wrapping that would break the fixed-row UI layout.
+		truncated := truncateVisualWidth(menuTitle, itemMaxLen)
+		menuName = titleStyle.Render(truncated)
 	} else if menuTitleLen+menuSubtitleLen > itemMaxLen {
 		r := []rune(m.menuList[index].Subtitle + "   ")
 		s := make([]rune, 0, itemMaxLen-menuTitleLen)
@@ -1209,6 +1236,7 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 			return newPage, a.RerenderCmd(true)
 		}
 		return m, a.RerenderCmd(true)
+
 	}
 
 	return m, a.Tick(time.Nanosecond)

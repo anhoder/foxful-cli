@@ -84,6 +84,7 @@ type Menu interface {
 
 	// TopOutHook Hook while top out
 	TopOutHook() Hook
+
 }
 
 type LocalSearchMenu interface {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/anhoder/foxful-cli/layout"
 	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fogleman/ease"
 )
 
@@ -110,6 +112,15 @@ func (s *StartupPage) logoView(a *App) string {
 	}
 
 	originLogo := util.GetAlphaAscii(s.options.Welcome)
+
+	// Truncate each line to window width to prevent overflow wrapping
+	// that would break the centered layout on narrow terminals.
+	lines := strings.Split(originLogo, "\n")
+	for i, line := range lines {
+		lines[i] = ansi.TruncateWc(line, windowWidth, "")
+	}
+	originLogo = strings.Join(lines, "\n")
+
 	return lipgloss.NewStyle().
 		Align(lipgloss.Center).
 		Width(windowWidth).
@@ -125,6 +136,7 @@ func (s *StartupPage) tipsView(a *App) string {
 
 	tips := fmt.Sprintf("Enter after %.1f seconds...",
 		float64(s.options.LoadingDuration-s.loadedDuration)/float64(time.Second))
+	tips = ansi.TruncateWc(tips, windowWidth, "")
 	return style.CurrentStyleSet().Subtitle.Copy().
 		Align(lipgloss.Center).
 		Width(windowWidth).
