@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"image/color"
+	"os"
 	"strings"
 	"unicode"
 
@@ -13,13 +14,21 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// ResizeCorner identifies which corner of the popup is being resized.
-type ResizeCorner int
+// ResizeHandle identifies which edge or corner of the popup is being resized.
+type ResizeHandle int
 
 const (
-	ResizeNone ResizeCorner = iota
+	ResizeNone ResizeHandle = iota
+	// Corners
 	ResizeBottomRight
-	// Future: ResizeBottomLeft, ResizeTopRight, ResizeTopLeft
+	ResizeBottomLeft
+	ResizeTopRight
+	ResizeTopLeft
+	// Edges
+	ResizeRight
+	ResizeLeft
+	ResizeBottom
+	ResizeTop
 )
 
 const (
@@ -79,6 +88,11 @@ type PopupSpec struct {
 	OffsetX   int
 	OffsetY   int
 	OnResult  func(PopupResult)
+
+	// DisableResize disables the mouse-driven resize feature (indicator, corner
+	// drag, and resize cursor hints). When true, the popup renders without the
+	// ◢ indicator and ignores resize-corner mouse events. Default false.
+	DisableResize bool
 }
 
 // Popup is an active modal dialog. Its configuration is immutable after
@@ -93,6 +107,8 @@ type Popup struct {
 	offsetX   int
 	offsetY   int
 	onResult  func(PopupResult)
+
+	disableResize bool // when true, hide indicator and ignore resize mouse events
 
 	focusedAction int
 	hoveredAction int
@@ -117,7 +133,7 @@ type Popup struct {
 	resizeStartH     int // popup height when resize began
 	resizeStartMouseX int
 	resizeStartMouseY int
-	resizeCorner     ResizeCorner
+	resizeHandle     ResizeHandle
 
 	// Text selection state, in full-content coordinates (line index into
 	// contentLines, display column). Anchor is where the drag began; cursor
@@ -200,6 +216,7 @@ func NewPopup(spec PopupSpec) (*Popup, error) {
 		offsetX:       spec.OffsetX,
 		offsetY:       spec.OffsetY,
 		onResult:      spec.OnResult,
+		disableResize: spec.DisableResize,
 		hoveredAction: -1,
 	}, nil
 }
@@ -372,34 +389,65 @@ func (p *Popup) render(styles style.PopupStyleSet) popupRender {
 	if p.hasSelection {
 		visibleLines = p.applySelectionHighlight(visibleLines)
 	}
-	body, bodyWidth := renderPopupBody(visibleLines, scrolling, p.scrollOffset, p.maxScrollOffset(), maxContentWidth, styles)
-	bodyHeight := textHeight(body)
+	bodyStr, contentWidth, scrollbarLines := renderPopupBody(visibleLines, scrolling, p.scrollOffset, p.maxScrollOffset(), maxContentWidth, styles)
+
+	// Compute bodyWidth: content width + scrollbar overhead when scrolling.
+	bodyWidth := contentWidth
+	if scrolling {
+		bodyWidth = contentWidth + 2 // content + 1-char gap + 1-char scrollbar
+	}
+
+	bodyHeight := textHeight(bodyStr)
 	// Capture body/scrollbar geometry (popup-relative) for mouse hit-testing.
 	p.bodyRelX = popupFrameInsetX
 	p.bodyRelY = popupFrameInsetY
 	p.visibleRows = visibleHeight
 	if scrolling {
-		p.contentTextW = max(bodyWidth-2, 0)
-		p.scrollbarRelX = popupFrameInsetX + bodyWidth - 1
+		p.contentTextW = contentWidth
 		thumbLine := 0
 		if p.maxScrollOffset() > 0 && visibleHeight > 0 {
 			thumbLine = p.scrollOffset * (visibleHeight - 1) / p.maxScrollOffset()
 		}
 		p.thumbRelY = popupFrameInsetY + thumbLine
 	} else {
-		p.contentTextW = bodyWidth
+		p.contentTextW = contentWidth
 		p.scrollbarRelX = -1
 		p.thumbRelY = -1
 	}
 
 	innerWidth := max(bodyWidth, actions.width)
+	if p.maxWidth > 0 {
+		innerWidth = max(innerWidth, maxContentWidth)
+	}
+
+	// Scrollbar always pinned to the right edge of the body area.
+	if scrolling {
+		p.scrollbarRelX = popupFrameInsetX + innerWidth - 1
+	}
+
 	blocks := make([]string, 0, 3)
-	if body != "" {
-		blocks = append(blocks, lipgloss.NewStyle().Width(innerWidth).Background(styles.Surface).Render(body))
+	if bodyStr != "" {
+		if scrolling {
+			// Compose content + gap (surface bg) + scrollbar at right edge.
+			bodyLines := strings.Split(bodyStr, "\n")
+			gap := innerWidth - contentWidth - 1 // -1 for the scrollbar column
+			if gap < 1 {
+				gap = 1
+			}
+			gapStyle := lipgloss.NewStyle().Width(gap).Background(styles.Surface)
+			composed := make([]string, len(bodyLines))
+			for i := range bodyLines {
+				composed[i] = bodyLines[i] + gapStyle.Render("") + scrollbarLines[i]
+			}
+			bodyStr = lipgloss.NewStyle().Width(innerWidth).Background(styles.Surface).Render(strings.Join(composed, "\n"))
+		} else {
+			bodyStr = lipgloss.NewStyle().Width(innerWidth).Background(styles.Surface).Render(bodyStr)
+		}
+		blocks = append(blocks, bodyStr)
 	}
 	// One blank line separates the content from the action buttons.
 	spacerHeight := 0
-	if body != "" && actions.content != "" {
+	if bodyStr != "" && actions.content != "" {
 		blocks = append(blocks, lipgloss.NewStyle().Width(innerWidth).Background(styles.Surface).Render(""))
 		spacerHeight = 1
 	}
@@ -411,14 +459,33 @@ func (p *Popup) render(styles style.PopupStyleSet) popupRender {
 			Render(actions.content))
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+
+	// Pad inner content to fill maxHeight when set (for resize support).
+	if p.maxHeight > 0 {
+		targetInnerH := p.maxHeight - popupFrameVerticalOverhead
+		currentInnerH := lipgloss.Height(inner)
+		if currentInnerH < targetInnerH {
+			blankLine := lipgloss.NewStyle().Width(innerWidth).Background(styles.Surface).Render("")
+			for range targetInnerH - currentInnerH {
+				if inner == "" {
+					inner = blankLine
+				} else {
+					inner += "\n" + blankLine
+				}
+			}
+		}
+	}
+
 	framed := styles.Frame.Render(inner)
 
 	if p.title != "" {
 		framed = embedTitleInTopBorder(framed, p.title, styles)
 	}
 
-	// Add resize indicator in bottom-right corner
-	framed = addResizeIndicator(framed, styles.Surface)
+	// Add resize indicator in bottom-right corner (if resize enabled)
+	if !p.disableResize {
+		framed = addResizeIndicator(framed, styles.Surface)
+	}
 
 	actionY := popupFrameInsetY + bodyHeight + spacerHeight
 	actionX := popupFrameInsetX + (innerWidth-actions.width)/2
@@ -593,19 +660,19 @@ func (p *Popup) renderActions(styles style.PopupStyleSet, maxWidth int) popupAct
 	}
 }
 
-func renderPopupBody(lines []string, scrolling bool, offset, maxOffset, maxWidth int, styles style.PopupStyleSet) (string, int) {
+func renderPopupBody(lines []string, scrolling bool, offset, maxOffset, maxWidth int, styles style.PopupStyleSet) (string, int, []string) {
 	if len(lines) == 0 {
-		return "", 0
+		return "", 0, nil
 	}
 	if !scrolling {
 		if maxWidth == 0 {
-			return strings.Join(lines, "\n"), widestLine(lines)
+			return strings.Join(lines, "\n"), widestLine(lines), nil
 		}
 		output := make([]string, len(lines))
 		for i, line := range lines {
 			output[i] = lipgloss.NewStyle().MaxWidth(maxWidth).Render(line)
 		}
-		return strings.Join(output, "\n"), widestLine(output)
+		return strings.Join(output, "\n"), widestLine(output), nil
 	}
 
 	bodyWidth := widestLine(lines)
@@ -618,16 +685,19 @@ func renderPopupBody(lines []string, scrolling bool, offset, maxOffset, maxWidth
 		thumbLine = offset * (len(lines) - 1) / maxOffset
 	}
 	output := make([]string, len(lines))
+	scrollbarLines := make([]string, len(lines))
 	for i, line := range lines {
 		line = lipgloss.NewStyle().MaxWidth(bodyWidth).Render(line)
 		line = lipgloss.NewStyle().Width(bodyWidth).Render(line)
+		output[i] = line
+
 		scrollbar := styles.ScrollTrack.Render("│")
 		if i == thumbLine {
 			scrollbar = styles.ScrollThumb.Render("█")
 		}
-		output[i] = line + " " + scrollbar
+		scrollbarLines[i] = scrollbar
 	}
-	return strings.Join(output, "\n"), bodyWidth + 2
+	return strings.Join(output, "\n"), bodyWidth, scrollbarLines
 }
 
 func widestLine(lines []string) int {
@@ -730,19 +800,33 @@ func (p *Popup) handleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 		// Calculate deltas from resize start position
 		deltaX := mouse.X - p.resizeStartMouseX
 		deltaY := mouse.Y - p.resizeStartMouseY
-		
-		// Apply resize based on corner
-		switch p.resizeCorner {
+		minW := popupFrameHorizontalOverhead + 10 // enough for buttons
+		minH := popupFrameVerticalOverhead + 3    // title + 1 line + buttons
+
+		// Apply resize based on handle type
+		switch p.resizeHandle {
+		// Corners — change both width and height
 		case ResizeBottomRight:
-			// Increase width and height
-			newW := p.resizeStartW + deltaX
-			newH := p.resizeStartH + deltaY
-			
-			// Enforce minimum sizes
-			minW := popupFrameHorizontalOverhead + 10 // enough for buttons
-			minH := popupFrameVerticalOverhead + 3    // title + 1 line + buttons
-			p.maxWidth = max(newW, minW)
-			p.maxHeight = max(newH, minH)
+			p.maxWidth = max(p.resizeStartW+deltaX, minW)
+			p.maxHeight = max(p.resizeStartH+deltaY, minH)
+		case ResizeBottomLeft:
+			p.maxWidth = max(p.resizeStartW-deltaX, minW)
+			p.maxHeight = max(p.resizeStartH+deltaY, minH)
+		case ResizeTopRight:
+			p.maxWidth = max(p.resizeStartW+deltaX, minW)
+			p.maxHeight = max(p.resizeStartH-deltaY, minH)
+		case ResizeTopLeft:
+			p.maxWidth = max(p.resizeStartW-deltaX, minW)
+			p.maxHeight = max(p.resizeStartH-deltaY, minH)
+		// Edges — change only one dimension
+		case ResizeRight:
+			p.maxWidth = max(p.resizeStartW+deltaX, minW)
+		case ResizeLeft:
+			p.maxWidth = max(p.resizeStartW-deltaX, minW)
+		case ResizeBottom:
+			p.maxHeight = max(p.resizeStartH+deltaY, minH)
+		case ResizeTop:
+			p.maxHeight = max(p.resizeStartH-deltaY, minH)
 		}
 		
 		return true, nil
@@ -799,11 +883,11 @@ func (p *Popup) handleLeftClick(mouse tea.Mouse, hoverCmd tea.Cmd) (bool, tea.Cm
 	relY := mouse.Y - p.bounds.y
 
 
-	// Check for resize handle (highest priority for corner)
-	if corner := p.resizeHandleAt(mouse); corner != ResizeNone {
+	// Check for resize handle (highest priority for edge/corner)
+	if h := p.resizeHandleAt(mouse); h != ResizeNone {
 		p.clearSelection()
 		p.resizing = true
-		p.resizeCorner = corner
+		p.resizeHandle = h
 		p.resizeStartW = p.bounds.w
 		p.resizeStartH = p.bounds.h
 		p.resizeStartMouseX = mouse.X
@@ -852,7 +936,7 @@ func (p *Popup) handleLeftClick(mouse tea.Mouse, hoverCmd tea.Cmd) (bool, tea.Cm
 
 func setMousePointer(shape string) tea.Cmd {
 	return func() tea.Msg {
-		print("\x1b]22;" + shape + "\x1b\\")
+		os.Stdout.WriteString("\x1b]22;" + shape + "\x1b\\")
 		return nil
 	}
 }
@@ -880,43 +964,30 @@ func (p *Popup) desiredPointer(mouse tea.Mouse) string {
 	
 	relX := mouse.X - p.bounds.x
 	relY := mouse.Y - p.bounds.y
-	
-	// Check if on border edges (for potential future edge resize)
-	onTopEdge := relY == 0
-	onBottomEdge := relY == p.bounds.h - 1
-	onLeftEdge := relX == 0
-	onRightEdge := relX == p.bounds.w - 1
-	
-	// Check resize handle (corners have highest priority)
-	if corner := p.resizeHandleAt(mouse); corner != ResizeNone {
-		switch corner {
+
+	// Check resize handle (corners have highest priority, then edges)
+	if h := p.resizeHandleAt(mouse); h != ResizeNone {
+		switch h {
 		case ResizeBottomRight:
-			return "nwse-resize" // ↖↘ diagonal arrow
-		// Future corners:
-		// case ResizeBottomLeft:
-		//     return "nesw-resize" // ↗↙ diagonal arrow
-		// case ResizeTopRight:
-		//     return "nesw-resize" // ↗↙ diagonal arrow
-		// case ResizeTopLeft:
-		//     return "nwse-resize" // ↖↘ diagonal arrow
+			return "nwse-resize" // ↖↘ diagonal (CSS name, Ghostty/iTerm2)
+		case ResizeTopLeft:
+			return "nwse-resize" // ↖↘ diagonal
+		case ResizeBottomLeft:
+			return "nesw-resize" // ↗↙ diagonal (CSS name, Ghostty/iTerm2)
+		case ResizeTopRight:
+			return "nesw-resize" // ↗↙ diagonal
+		case ResizeRight, ResizeLeft:
+			return "ew-resize" // ↔
+		case ResizeBottom, ResizeTop:
+			return "ns-resize" // ↕
 		}
 	}
-	
-	// Show appropriate cursor for edges (even if resize not yet implemented)
-	// This provides visual feedback that the border is interactive
-	if onTopEdge && !onLeftEdge && !onRightEdge {
-		return "ns-resize" // ↕ vertical arrow (for future top edge resize)
+
+	// Title bar area — cursor indicates draggable (grab)
+	if relY == 0 {
+		return "grab"
 	}
-	if onBottomEdge && !onLeftEdge && !onRightEdge {
-		return "ns-resize" // ↕ vertical arrow (for future bottom edge resize)
-	}
-	if onLeftEdge && !onTopEdge && !onBottomEdge {
-		return "ew-resize" // ↔ horizontal arrow (for future left edge resize)
-	}
-	if onRightEdge && !onTopEdge && !onBottomEdge {
-		return "ew-resize" // ↔ horizontal arrow (for future right edge resize)
-	}
-	
+
 	if p.actionAt(mouse.X, mouse.Y) >= 0 {
 		return "pointer"
 	}
@@ -935,20 +1006,40 @@ func (p *Popup) desiredPointer(mouse tea.Mouse) string {
 	return ""
 }
 
-// resizeHandleAt reports which resize corner (if any) the mouse is over.
-// Currently only supports bottom-right corner (MVP).
-func (p *Popup) resizeHandleAt(mouse tea.Mouse) ResizeCorner {
-	if !p.boundsSet {
+// resizeHandleAt reports which resize handle (corner or edge) the mouse is over.
+func (p *Popup) resizeHandleAt(mouse tea.Mouse) ResizeHandle {
+	if !p.boundsSet || p.disableResize {
 		return ResizeNone
 	}
-	
+
 	x, y := mouse.X, mouse.Y
-	
-	// Bottom-right corner (1x1 character)
-	if x == p.bounds.x+p.bounds.w-1 && y == p.bounds.y+p.bounds.h-1 {
+	relX := x - p.bounds.x
+	relY := y - p.bounds.y
+
+	onLeft := relX == 0
+	onRight := relX == p.bounds.w-1
+	onBottom := relY == p.bounds.h-1
+
+	// Corners (top corners excluded — reserved for title-bar drag)
+	if onRight && onBottom {
 		return ResizeBottomRight
 	}
-	
+	if onLeft && onBottom {
+		return ResizeBottomLeft
+	}
+
+	// Edges (top edge excluded — reserved for title-bar drag).
+	// Left/right edge also excludes the top row so top corners trigger drag.
+	if onRight && relY != 0 {
+		return ResizeRight
+	}
+	if onLeft && relY != 0 {
+		return ResizeLeft
+	}
+	if onBottom {
+		return ResizeBottom
+	}
+
 	return ResizeNone
 }
 
