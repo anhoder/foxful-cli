@@ -68,6 +68,42 @@ type PopupStyleSet struct {
 	ScrollThumb   lipgloss.Style
 }
 
+// NotificationTheme groups the visual tokens for the notification system.
+// Nil color fields fall back to semantic Theme colors.
+type NotificationTheme struct {
+	Surface color.Color // nil → Theme.Surface → Theme.Background → adaptive default
+
+	// Per-level border colors. Nil falls back to the matching semantic color.
+	InfoBorder    color.Color // nil → Theme.Info
+	SuccessBorder color.Color // nil → Theme.Success
+	WarningBorder color.Color // nil → Theme.Warning
+	ErrorBorder   color.Color // nil → Theme.Error
+
+	// Title and Message apply only foreground and text attributes; their
+	// backgrounds are forced to Surface so they cannot fragment the surface.
+	Title   Highlight
+	Message Highlight
+}
+
+// NotificationStyleSet is the resolved, render-ready notification visual surface.
+type NotificationStyleSet struct {
+	Surface color.Color
+
+	InfoFrame    lipgloss.Style
+	SuccessFrame lipgloss.Style
+	WarningFrame lipgloss.Style
+	ErrorFrame   lipgloss.Style
+
+	Title   lipgloss.Style
+	Message lipgloss.Style
+
+	// Level icon prefixes (Unicode).
+	InfoIcon    string
+	SuccessIcon string
+	WarningIcon string
+	ErrorIcon   string
+}
+
 // BuiltinHighlightPresets defines named highlight presets that can be referenced
 // via Highlight.Preset. Users can override or extend these via Theme.HighlightPresets.
 // Preset values act as defaults — explicit fields on the Highlight take precedence.
@@ -106,26 +142,27 @@ type Theme struct {
 	// Nil Fg/Bg fall back to the defaults documented below.
 	// Nil Bold/Italic/Underline means "use the element's default" (usually false).
 
-	Title                Highlight  // fg→Primary, bold→true
-	MenuTitle            Highlight  // fg→Primary
-	MenuItem             Highlight  // fg→nil (terminal default), bg→transparent
-	SelectedItem         Highlight  // fg→Primary, bg→computed from Primary blend
-	Subtitle             Highlight  // fg→Secondary
-	Prompt               Highlight  // fg→Primary
-	BackButton           Highlight  // fg→Secondary, bold→true
-	Breadcrumb           Highlight  // fg→Muted, bg→computed from Surface (used by status bar)
-	Button               Highlight  // fg→Primary
-	ButtonBlurred        Highlight  // fg→Secondary
-	ProgressEmpty        Highlight  // fg→Secondary
-	Popup                PopupTheme // popup-owned surface and interactive states
-	StatusBar            Highlight  // fg→Secondary, bg→transparent
-	StatusBarText        Highlight  // fg→Secondary
-	StatusBarBreadcrumb  Highlight  // fg→Muted, bg→computed (falls back to StatusBarTime.Bg)
-	StatusBarTime        Highlight  // fg→Muted, bg→computed from Surface blend
-	StatusBarNugget      Highlight  // fg→Foreground (or white on dark), bg→transparent
-	StatusBarNuggetLabel Highlight  // fg→same as StatusBarNugget.Fg, bg→Primary
-	AppBackground        Highlight  // Bg→transparent (terminal shows through)
-	MenuBg               Highlight  // Bg→transparent (falls back to AppBackground.Bg)
+	Title                Highlight         // fg→Primary, bold→true
+	MenuTitle            Highlight         // fg→Primary
+	MenuItem             Highlight         // fg→nil (terminal default), bg→transparent
+	SelectedItem         Highlight         // fg→Primary, bg→computed from Primary blend
+	Subtitle             Highlight         // fg→Secondary
+	Prompt               Highlight         // fg→Primary
+	BackButton           Highlight         // fg→Secondary, bold→true
+	Breadcrumb           Highlight         // fg→Muted, bg→computed from Surface (used by status bar)
+	Button               Highlight         // fg→Primary
+	ButtonBlurred        Highlight         // fg→Secondary
+	ProgressEmpty        Highlight         // fg→Secondary
+	Popup                PopupTheme        // popup-owned surface and interactive states
+	Notification         NotificationTheme // notification-owned surface, borders, icons
+	StatusBar            Highlight         // fg→Secondary, bg→transparent
+	StatusBarText        Highlight         // fg→Secondary
+	StatusBarBreadcrumb  Highlight         // fg→Muted, bg→computed (falls back to StatusBarTime.Bg)
+	StatusBarTime        Highlight         // fg→Muted, bg→computed from Surface blend
+	StatusBarNugget      Highlight         // fg→Foreground (or white on dark), bg→transparent
+	StatusBarNuggetLabel Highlight         // fg→same as StatusBarNugget.Fg, bg→Primary
+	AppBackground        Highlight         // Bg→transparent (terminal shows through)
+	MenuBg               Highlight         // Bg→transparent (falls back to AppBackground.Bg)
 
 	// ---- Hover/click highlights (interactive states) ----
 	// Each field below controls the visual feedback when the mouse hovers or
@@ -381,6 +418,9 @@ type StyleSet struct {
 	// Popup is the complete resolved visual surface for popup dialogs.
 	Popup PopupStyleSet
 
+	// Notification is the complete resolved visual surface for notifications.
+	Notification NotificationStyleSet
+
 	// Success is the style for success/positive messages.
 	Success lipgloss.Style
 
@@ -566,6 +606,8 @@ func NewStyleSet(theme Theme) StyleSet {
 	theme.Popup.Action = resolvePreset(theme.Popup.Action)
 	theme.Popup.ActionFocused = resolvePreset(theme.Popup.ActionFocused)
 	theme.Popup.ActionHover = resolvePreset(theme.Popup.ActionHover)
+	theme.Notification.Title = resolvePreset(theme.Notification.Title)
+	theme.Notification.Message = resolvePreset(theme.Notification.Message)
 	theme.StatusBar = resolvePreset(theme.StatusBar)
 	theme.StatusBarText = resolvePreset(theme.StatusBarText)
 	theme.StatusBarBreadcrumb = resolvePreset(theme.StatusBarBreadcrumb)
@@ -812,6 +854,47 @@ func NewStyleSet(theme Theme) StyleSet {
 		ScrollThumb: lipgloss.NewStyle().
 			Foreground(theme.Primary).
 			Background(popupSurface),
+	}
+
+	// Notification surface: reuse popup-style resolution.
+	notifSurface := or(theme.Notification.Surface, theme.Surface)
+	if notifSurface == nil {
+		notifSurface = theme.Background
+	}
+	if notifSurface == nil {
+		if detectedDarkBg {
+			notifSurface = lipgloss.Color("#242424")
+		} else {
+			notifSurface = lipgloss.Color("#F5F5F5")
+		}
+	}
+	notifTitleHL := resolveHL(theme.Notification.Title, theme.Primary, nil)
+	if notifTitleHL.Bold == nil {
+		notifTitleHL.Bold = BoolPtr(true)
+	}
+	notifMessageHL := resolveHL(theme.Notification.Message, theme.Foreground, nil)
+
+	notifFrame := func(border color.Color) lipgloss.Style {
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(border).
+			BorderBackground(notifSurface).
+			Background(notifSurface).
+			Padding(0, 1)
+	}
+
+	base.Notification = NotificationStyleSet{
+		Surface:      notifSurface,
+		InfoFrame:    notifFrame(or(theme.Notification.InfoBorder, theme.Info)),
+		SuccessFrame: notifFrame(or(theme.Notification.SuccessBorder, theme.Success)),
+		WarningFrame: notifFrame(or(theme.Notification.WarningBorder, theme.Warning)),
+		ErrorFrame:   notifFrame(or(theme.Notification.ErrorBorder, theme.Error)),
+		Title:        applyPopupText(lipgloss.NewStyle(), notifTitleHL, notifSurface),
+		Message:      applyPopupText(lipgloss.NewStyle(), notifMessageHL, notifSurface),
+		InfoIcon:     "ℹ ",
+		SuccessIcon:  "✓ ",
+		WarningIcon:  "⚠ ",
+		ErrorIcon:    "✗ ",
 	}
 
 	// Semantic colors

@@ -2,6 +2,7 @@ package model
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,9 @@ type App struct {
 
 	page       Page    // current page
 	modalStack []Modal // stack of active modals (popups, context menus); topmost is last
+
+	notifications      []*Notification // active notifications (newest at end)
+	nextNotificationID NotificationID
 
 	listeningKBEventL    sync.Mutex
 	listeningMouseEventL sync.Mutex
@@ -174,6 +178,38 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Notification messages are handled before modal interception so they work
+	// regardless of any open modal. These are never Key/Mouse messages, so the
+	// locks at the top of Update do not apply.
+	switch msgWithType := msg.(type) {
+	case ShowNotificationMsg:
+		return a, a.handleShowNotification(msgWithType.Spec)
+	case notificationExpireMsg:
+		a.removeNotification(msgWithType.id)
+		return a, a.RerenderCmd(true)
+	case updateNotificationMsg:
+		a.updateNotificationContent(msgWithType.id, msgWithType.spec)
+		return a, a.RerenderCmd(true)
+	case dismissNotificationMsg:
+		a.removeNotification(msgWithType.id)
+		return a, a.RerenderCmd(true)
+	case clearAllNotificationsMsg:
+		a.notifications = nil
+		return a, a.RerenderCmd(true)
+	}
+
+	// Click on a notification dismisses it and consumes the click. Checked
+	// before modal/page routing so notifications (rendered on top) intercept
+	// only clicks that land on their bounds; everything else passes through.
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if _, isClick := mouseMsg.(tea.MouseClickMsg); isClick {
+			if clickedID := a.notificationAt(mouseMsg.Mouse()); clickedID != 0 {
+				a.removeNotification(clickedID)
+				return a, a.RerenderCmd(true)
+			}
+		}
+	}
+
 	// Modal input interception — only the topmost modal receives input.
 	if len(a.modalStack) > 0 {
 		top := a.modalStack[len(a.modalStack)-1]
@@ -283,12 +319,18 @@ func (a *App) View() tea.View {
 	}
 
 	baseContent := a.page.View(a)
-	if len(a.modalStack) == 0 {
-		v.SetContent(baseContent)
-		return v
+
+	// Composite modals on top of the page content (if any).
+	if len(a.modalStack) > 0 {
+		baseContent = a.compositeModals(baseContent)
 	}
 
-	v.SetContent(a.compositeModals(baseContent))
+	// Composite notifications on top of everything (page + modals).
+	if len(a.notifications) > 0 {
+		baseContent = a.compositeNotifications(baseContent)
+	}
+
+	v.SetContent(baseContent)
 	return v
 }
 
@@ -498,4 +540,267 @@ func (a *App) compositeModals(baseContent string) string {
 		}
 	}
 	return layout.NewCompositor(layers...).Render()
+}
+
+// ---- Notification API ----
+
+// Notify displays a notification and returns its ID. For Info/Success levels,
+// the notification auto-dismisses after the configured timeout unless spec.Timeout
+// is explicitly set. For Warning/Error levels, the notification persists until
+// dismissed manually or replaced by newer notifications beyond the screen limit.
+//
+// Safe to call from goroutines; internally sends a message to the Update loop.
+func (a *App) Notify(spec NotificationSpec) NotificationID {
+	if a.program == nil {
+		return 0
+	}
+	// Assign ID optimistically for return (actual assignment happens in Update).
+	// This is a heuristic; for guaranteed ID tracking, use the returned ID.
+	nextID := a.nextNotificationID + 1
+	a.program.Send(ShowNotificationMsg{Spec: spec})
+	return nextID
+}
+
+// UpdateNotification updates the content of an existing notification.
+// Does nothing if the ID does not exist.
+func (a *App) UpdateNotification(id NotificationID, spec NotificationSpec) {
+	if a.program == nil {
+		return
+	}
+	a.program.Send(updateNotificationMsg{id: id, spec: spec})
+}
+
+// DismissNotification dismisses a specific notification by ID.
+// Does nothing if the ID does not exist.
+func (a *App) DismissNotification(id NotificationID) {
+	if a.program == nil {
+		return
+	}
+	a.program.Send(dismissNotificationMsg{id: id})
+}
+
+// ClearAllNotifications dismisses all visible notifications immediately.
+func (a *App) ClearAllNotifications() {
+	if a.program == nil {
+		return
+	}
+	a.program.Send(clearAllNotificationsMsg{})
+}
+
+// handleShowNotification creates a notification and returns a timeout Cmd if needed.
+func (a *App) handleShowNotification(spec NotificationSpec) tea.Cmd {
+	a.nextNotificationID++
+	id := a.nextNotificationID
+
+	notif := &Notification{
+		id:        id,
+		spec:      spec,
+		createdAt: time.Now(),
+	}
+	a.notifications = append(a.notifications, notif)
+
+	cmds := []tea.Cmd{a.RerenderCmd(true)}
+
+	// Determine timeout: explicit spec.Timeout takes precedence; otherwise
+	// Info/Success default to configured timeout, Warning/Error persist.
+	timeout := spec.Timeout
+	if timeout == 0 {
+		if spec.Level == NotificationInfo || spec.Level == NotificationSuccess {
+			timeout = a.options.NotificationOptions.DefaultTimeout
+			if timeout == 0 {
+				timeout = 4 * time.Second
+			}
+		}
+	}
+
+	if timeout > 0 {
+		cmds = append(cmds, tea.Tick(timeout, func(time.Time) tea.Msg {
+			return notificationExpireMsg{id: id}
+		}))
+	}
+
+	return tea.Batch(cmds...)
+}
+
+// removeNotification removes a notification by ID.
+func (a *App) removeNotification(id NotificationID) {
+	for i, n := range a.notifications {
+		if n.id == id {
+			a.notifications = append(a.notifications[:i], a.notifications[i+1:]...)
+			return
+		}
+	}
+}
+
+// updateNotificationContent updates the spec of an existing notification.
+func (a *App) updateNotificationContent(id NotificationID, spec NotificationSpec) {
+	for _, n := range a.notifications {
+		if n.id == id {
+			n.spec = spec
+			return
+		}
+	}
+}
+
+// notificationAt returns the ID of the notification at the given mouse position,
+// or 0 if no notification is under the mouse.
+func (a *App) notificationAt(mouse tea.Mouse) NotificationID {
+	for i := len(a.notifications) - 1; i >= 0; i-- {
+		n := a.notifications[i]
+		if n.boundsSet && n.bounds.contains(mouse.X, mouse.Y) {
+			return n.id
+		}
+	}
+	return 0
+}
+
+// compositeNotifications overlays all active notifications on top of the base content.
+func (a *App) compositeNotifications(baseContent string) string {
+	w, h := a.WindowWidth(), a.WindowHeight()
+	ss := style.CurrentStyleSet()
+	opts := a.options.NotificationOptions
+
+	// Calculate effective max width (0 = min(termWidth/3, 60)).
+	maxWidth := opts.MaxWidth
+	if maxWidth == 0 {
+		maxWidth = min(w/3, 60)
+	}
+	maxWidth = max(maxWidth, 20) // minimum sanity bound
+
+	// Dynamic height limit: notifications occupy at most half the screen.
+	maxTotalHeight := h / 2
+	gap := opts.Gap
+
+	layers := []*layout.Layer{layout.NewLayer(baseContent)}
+	currentHeight := 0
+
+	// Render from newest (end of slice) to oldest, accumulating height.
+	// Stop when we exceed the screen height limit.
+	for i := len(a.notifications) - 1; i >= 0; i-- {
+		n := a.notifications[i]
+		rendered := a.renderNotification(n, ss.Notification, maxWidth, opts.MaxLines)
+		notifH := lipgloss.Height(rendered)
+		notifW := layout.Width(rendered)
+
+		if currentHeight+notifH > maxTotalHeight {
+			break // Oldest notifications are pushed out of view.
+		}
+
+		x, y := a.computeNotificationPosition(opts.Anchor, w, h, notifW, notifH, currentHeight, gap)
+		n.setBounds(x, y, notifW, notifH)
+
+		layers = append(layers, layout.NewLayer(rendered).X(x).Y(y))
+		currentHeight += notifH + gap
+	}
+
+	return layout.NewCompositor(layers...).Render()
+}
+
+// renderNotification renders a single notification with the given constraints.
+func (a *App) renderNotification(n *Notification, styles style.NotificationStyleSet, maxWidth, maxLines int) string {
+	spec := n.spec
+
+	// Select frame style and icon based on level.
+	var frameStyle lipgloss.Style
+	var icon string
+	switch spec.Level {
+	case NotificationInfo:
+		frameStyle = styles.InfoFrame
+		icon = styles.InfoIcon
+	case NotificationSuccess:
+		frameStyle = styles.SuccessFrame
+		icon = styles.SuccessIcon
+	case NotificationWarning:
+		frameStyle = styles.WarningFrame
+		icon = styles.WarningIcon
+	case NotificationError:
+		frameStyle = styles.ErrorFrame
+		icon = styles.ErrorIcon
+	}
+
+	// Content width = maxWidth - frame overhead (2 border + 2 padding).
+	contentWidth := maxWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	var blocks []string
+
+	// Title line (if present): icon + title, truncated if too long.
+	if spec.Title != "" {
+		titleText := icon + spec.Title
+		// Truncate with ellipsis if it exceeds contentWidth.
+		titleRunes := []rune(titleText)
+		if len(titleRunes) > contentWidth {
+			titleRunes = append(titleRunes[:contentWidth-1], '…')
+			titleText = string(titleRunes)
+		}
+		title := styles.Title.Width(contentWidth).Render(titleText)
+		blocks = append(blocks, title)
+	}
+
+	// Message body: wrap to contentWidth, then truncate to maxLines.
+	if spec.Message != "" {
+		// Use lipgloss MaxWidth to wrap, preserving ANSI styles.
+		wrapped := lipgloss.NewStyle().MaxWidth(contentWidth).Render(spec.Message)
+		lines := strings.Split(wrapped, "\n")
+
+		// Truncate to maxLines if needed, adding ellipsis on the last visible line.
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+			lastLine := lines[maxLines-1]
+			// Append ellipsis to the last line. Use ansi.Truncate to ensure we
+			// don't exceed contentWidth after adding the ellipsis.
+			lastLine = ansi.Truncate(lastLine, contentWidth-1, "…")
+			lines[maxLines-1] = lastLine
+		}
+
+		msg := styles.Message.Width(contentWidth).Render(strings.Join(lines, "\n"))
+		blocks = append(blocks, msg)
+	}
+
+	// Join title and message vertically.
+	inner := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+
+	// Apply the frame.
+	framed := frameStyle.Render(inner)
+	return framed
+}
+
+// computeNotificationPosition calculates the (x, y) position for a notification
+// based on anchor, terminal dimensions, notification dimensions, and stack offset.
+func (a *App) computeNotificationPosition(anchor PopupAnchor, termW, termH, notifW, notifH, stackOffset, gap int) (int, int) {
+	const margin = 1
+
+	var x, y int
+
+	// Horizontal positioning.
+	switch anchor {
+	case AnchorTopLeft, AnchorBottomLeft:
+		x = margin
+	case AnchorTopRight, AnchorBottomRight:
+		x = termW - notifW - margin
+	case AnchorTopCenter, AnchorBottomCenter, AnchorCenter:
+		x = (termW - notifW) / 2
+	default:
+		x = (termW - notifW) / 2
+	}
+
+	// Vertical positioning with stack offset.
+	switch anchor {
+	case AnchorTopLeft, AnchorTopCenter, AnchorTopRight:
+		// Stack downward from the top.
+		y = margin + stackOffset
+	case AnchorBottomLeft, AnchorBottomCenter, AnchorBottomRight:
+		// Stack upward from the bottom. y is the top-left of the notification.
+		y = termH - margin - stackOffset - notifH
+	default: // AnchorCenter or custom
+		y = (termH / 3) + stackOffset
+	}
+
+	// Clamp to screen bounds.
+	x = max(0, min(x, termW-notifW))
+	y = max(0, min(y, termH-notifH))
+
+	return x, y
 }

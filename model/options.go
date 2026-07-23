@@ -11,6 +11,7 @@ import (
 type Options struct {
 	StartupOptions
 	ProgressOptions
+	NotificationOptions
 
 	AppName             string
 	WhetherDisplayTitle bool
@@ -62,6 +63,15 @@ type StartupOptions struct {
 	ReducedMotion bool
 }
 
+// NotificationOptions configures the global notification system behavior.
+type NotificationOptions struct {
+	Anchor         PopupAnchor   // Screen anchor. Default AnchorTopRight.
+	DefaultTimeout time.Duration // Auto-dismiss timeout for Info/Success. Default 4s.
+	MaxWidth       int           // Whole-notification max width. 0 = min(termWidth/3, 60).
+	MaxLines       int           // Max message body lines before truncation. Default 5.
+	Gap            int           // Vertical gap between stacked notifications. Default 1.
+}
+
 func DefaultOptions() *Options {
 	return &Options{
 		StartupOptions: StartupOptions{
@@ -83,6 +93,13 @@ func DefaultOptions() *Options {
 			FullChar:           '#',
 			FullCharWhenLast:   '#',
 			LastFullChar:       '#',
+		},
+		NotificationOptions: NotificationOptions{
+			Anchor:         AnchorTopRight,
+			DefaultTimeout: 4 * time.Second,
+			MaxWidth:       0,
+			MaxLines:       5,
+			Gap:            1,
 		},
 		WhetherDisplayTitle: true,
 		DualColumn:          true,
@@ -129,5 +146,12 @@ func WithThemePair(dark, light style.Theme) WithOption {
 	return func(options *Options) {
 		options.DarkTheme = dark
 		options.LightTheme = light
+	}
+}
+
+// WithNotificationOptions overrides the notification system configuration.
+func WithNotificationOptions(opts NotificationOptions) WithOption {
+	return func(o *Options) {
+		o.NotificationOptions = opts
 	}
 }
