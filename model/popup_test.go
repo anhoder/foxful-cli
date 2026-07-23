@@ -2,6 +2,7 @@ package model
 
 import (
 	"image/color"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -40,7 +41,9 @@ func TestPopupRenderUsesSurfaceForScrolledContent(t *testing.T) {
 	theme.Popup.Surface = surface
 	styles := style.NewStyleSet(theme).Popup
 	content := lipgloss.NewStyle().Background(lipgloss.Color("#FF0000")).Render("one") + "\n" +
-		lipgloss.NewStyle().Background(lipgloss.Color("#00FF00")).Render("two")
+		lipgloss.NewStyle().Background(lipgloss.Color("#00FF00")).Render("two") + "\n" +
+		lipgloss.NewStyle().Background(lipgloss.Color("#0000FF")).Render("one") + "\n" +
+		lipgloss.NewStyle().Background(lipgloss.Color("#FFFF00")).Render("one")
 	if !samePopupColor(styles.ScrollTrack.GetBackground(), surface) || !samePopupColor(styles.ScrollThumb.GetBackground(), surface) {
 		t.Fatal("scrollbar styles must use the popup surface background")
 	}
@@ -177,7 +180,7 @@ func TestAppCompositePopupsPreservesPopupSurface(t *testing.T) {
 	app := &App{windowWidth: 80, windowHeight: 24}
 	app.ShowPopup(popup)
 	base := lipgloss.NewStyle().Background(lipgloss.Color("#FF0000")).Width(80).Height(24).Render("")
-	screen := popupStyledScreen(app.compositePopups(base))
+	screen := popupStyledScreen(app.compositeModals(base))
 
 	contentFound := false
 	for _, line := range screen.Lines {
@@ -248,6 +251,165 @@ func TestPopupEscapeSelectsCancelAction(t *testing.T) {
 	}
 	if result.ActionID != "cancel" || result.Cause != PopupDismissEscape {
 		t.Fatalf("escape result = %+v, want cancel action with escape cause", *result)
+	}
+}
+
+// newScrollablePopup builds a popup whose content overflows the visible area,
+// renders it with the default dark theme, and anchors it at screen (0,0) so
+// popup-relative coordinates equal screen coordinates.
+func newScrollablePopup(t *testing.T, actions ...PopupAction) (*Popup, style.PopupStyleSet) {
+	t.Helper()
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = "line" + string(rune('0'+i))
+	}
+	styles := style.NewStyleSet(style.DefaultDarkTheme()).Popup
+	popup, err := NewPopup(PopupSpec{
+		Content:   strings.Join(lines, "\n"),
+		MaxHeight: 9,
+		Actions:   actions,
+	})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+	rendered := popup.render(styles)
+	if !popup.isContentScrollable() {
+		t.Fatal("expected popup content to be scrollable")
+	}
+	w := lipgloss.Width(rendered.content)
+	h := lipgloss.Height(rendered.content)
+	popup.setBounds(0, 0, w, h, rendered.actionBounds)
+	return popup, styles
+}
+
+func TestPopupScrollbarThumbDrag(t *testing.T) {
+	popup, styles := newScrollablePopup(t)
+	if popup.thumbRelY != popupFrameInsetY {
+		t.Fatalf("thumbRelY = %d, want %d at offset 0", popup.thumbRelY, popupFrameInsetY)
+	}
+
+	// Grab the thumb.
+	handled, _ := popup.handleMouse(tea.MouseClickMsg(tea.Mouse{X: popup.scrollbarRelX, Y: popup.thumbRelY, Button: tea.MouseLeft}))
+	if !handled || !popup.scrollDragging {
+		t.Fatalf("clicking thumb did not start scroll drag (handled=%v dragging=%v)", handled, popup.scrollDragging)
+	}
+
+	// Drag to the bottom of the scroll track.
+	bottom := popup.bodyRelY + popup.visibleRows - 1
+	popup.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: popup.scrollbarRelX, Y: bottom, Button: tea.MouseLeft}))
+	if popup.scrollOffset != popup.maxScrollOffset() {
+		t.Fatalf("scrollOffset after drag = %d, want max %d", popup.scrollOffset, popup.maxScrollOffset())
+	}
+
+	// Release ends the drag.
+	popup.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: popup.scrollbarRelX, Y: bottom}))
+	if popup.scrollDragging {
+		t.Fatal("scroll drag did not end on release")
+	}
+	_ = styles
+}
+
+func TestPopupScrollbarTrackJump(t *testing.T) {
+	popup, _ := newScrollablePopup(t)
+	bottom := popup.bodyRelY + popup.visibleRows - 1
+	// Click the track below the thumb (not on the thumb itself).
+	handled, _ := popup.handleMouse(tea.MouseClickMsg(tea.Mouse{X: popup.scrollbarRelX, Y: bottom, Button: tea.MouseLeft}))
+	if !handled {
+		t.Fatal("track click not handled")
+	}
+	if popup.scrollDragging {
+		t.Fatal("track click should not start a thumb drag")
+	}
+	if popup.scrollOffset != popup.maxScrollOffset() {
+		t.Fatalf("track click scrollOffset = %d, want max %d", popup.scrollOffset, popup.maxScrollOffset())
+	}
+}
+
+func TestPopupPointerShapes(t *testing.T) {
+	popup, _ := newScrollablePopup(t, PopupAction{ID: "ok", Label: "OK"})
+
+	// Over the scrollbar thumb -> pointer.
+	if got := popup.desiredPointer(tea.Mouse{X: popup.scrollbarRelX, Y: popup.thumbRelY}); got != "pointer" {
+		t.Fatalf("pointer over thumb = %q, want pointer", got)
+	}
+	// Over content text -> text cursor.
+	if got := popup.desiredPointer(tea.Mouse{X: popup.bodyRelX, Y: popup.bodyRelY}); got != "text" {
+		t.Fatalf("pointer over content = %q, want text", got)
+	}
+	// Over an action button -> pointer.
+	if len(popup.actionBounds) == 0 {
+		t.Fatal("expected action bounds")
+	}
+	ab := popup.actionBounds[0]
+	if got := popup.desiredPointer(tea.Mouse{X: ab.x, Y: ab.y}); got != "pointer" {
+		t.Fatalf("pointer over action = %q, want pointer", got)
+	}
+	// Outside the popup -> default (empty).
+	if got := popup.desiredPointer(tea.Mouse{X: popup.bounds.x + popup.bounds.w + 5, Y: popup.bounds.y}); got != "" {
+		t.Fatalf("pointer outside popup = %q, want empty", got)
+	}
+}
+
+func TestPopupTextSelectionCopiesToClipboard(t *testing.T) {
+	popup, _ := newScrollablePopup(t)
+
+	// Press at the first content column of the first visible line.
+	handled, _ := popup.handleMouse(tea.MouseClickMsg(tea.Mouse{X: popup.bodyRelX, Y: popup.bodyRelY, Button: tea.MouseLeft}))
+	if !handled || !popup.selecting {
+		t.Fatalf("content press did not start selection (handled=%v selecting=%v)", handled, popup.selecting)
+	}
+
+	// Drag across the full width of the first line (past its last column).
+	popup.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY, Button: tea.MouseLeft}))
+
+	// Release finalizes: expect a clipboard command and the extracted text.
+	_, cmd := popup.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY}))
+	if cmd == nil {
+		t.Fatal("release did not produce a clipboard command")
+	}
+	if popup.selecting {
+		t.Fatal("selection should end on release")
+	}
+	if got := popup.selectionText(); got != "line0" {
+		t.Fatalf("selectionText() = %q, want %q", got, "line0")
+	}
+}
+
+func TestPopupSelectionSpansMultipleLines(t *testing.T) {
+	popup, _ := newScrollablePopup(t)
+
+	popup.handleMouse(tea.MouseClickMsg(tea.Mouse{X: popup.bodyRelX, Y: popup.bodyRelY, Button: tea.MouseLeft}))
+	// Drag to the end of the third visible line.
+	popup.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY + 2, Button: tea.MouseLeft}))
+	popup.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY + 2}))
+
+	if got, want := popup.selectionText(), "line0\nline1\nline2"; got != want {
+		t.Fatalf("selectionText() = %q, want %q", got, want)
+	}
+}
+
+func TestPopupEscapeClearsSelectionBeforeDismiss(t *testing.T) {
+	popup, _ := newScrollablePopup(t)
+	popup.handleMouse(tea.MouseClickMsg(tea.Mouse{X: popup.bodyRelX, Y: popup.bodyRelY, Button: tea.MouseLeft}))
+	popup.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY, Button: tea.MouseLeft}))
+	popup.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: popup.bodyRelX + popup.contentTextW, Y: popup.bodyRelY}))
+	if !popup.hasSelection {
+		t.Fatal("expected an active selection")
+	}
+
+	// First Esc clears the selection without dismissing.
+	popup.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if popup.hasSelection {
+		t.Fatal("first Esc should clear the selection")
+	}
+	if popup.dismissed() {
+		t.Fatal("first Esc should not dismiss the popup")
+	}
+
+	// Second Esc dismisses.
+	popup.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if !popup.dismissed() {
+		t.Fatal("second Esc should dismiss the popup")
 	}
 }
 

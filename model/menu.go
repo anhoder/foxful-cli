@@ -85,6 +85,14 @@ type Menu interface {
 	// TopOutHook Hook while top out
 	TopOutHook() Hook
 
+	// ContextMenuItems returns the context menu items for a right-clicked menu item.
+	// Return nil or empty slice to show no context menu for this item.
+	ContextMenuItems(app *App, index int) []ContextMenuItem
+
+	// ContextMenuAction is called when the user selects a context menu item.
+	// Similar to Action, it can return a Page and/or Cmd to perform navigation or side effects.
+	ContextMenuAction(app *App, index int, item ContextMenuItem) (Page, tea.Cmd)
+
 }
 
 type LocalSearchMenu interface {
@@ -157,6 +165,14 @@ func (e *DefaultMenu) TopOutHook() Hook {
 	return nil
 }
 
+func (e *DefaultMenu) ContextMenuItems(_ *App, _ int) []ContextMenuItem {
+	return nil
+}
+
+func (e *DefaultMenu) ContextMenuAction(_ *App, _ int, _ ContextMenuItem) (Page, tea.Cmd) {
+	return nil, nil
+}
+
 type Closer interface {
 	Close() error
 }
@@ -174,6 +190,7 @@ type defaultTicker struct {
 	ticker    *time.Ticker
 	stop      chan struct{}
 	pipeline  chan time.Time
+	closed    bool
 }
 
 func DefaultTicker(duration time.Duration) Ticker {
@@ -215,8 +232,11 @@ func (d *defaultTicker) PassedTime() time.Duration {
 	}
 	return d.t.Sub(d.startTime)
 }
-
 func (d *defaultTicker) Close() error {
+	if d.closed {
+		return nil
+	}
+	d.closed = true
 	close(d.stop)
 	d.ticker.Stop()
 	return nil

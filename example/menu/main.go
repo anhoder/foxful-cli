@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/anhoder/foxful-cli/model"
 )
 
@@ -56,6 +57,39 @@ func (m *MainMenu) SubMenu(_ *model.App, index int) model.Menu {
 	}
 
 	return secondaryMenu
+}
+
+func (m *MainMenu) ContextMenuItems(_ *model.App, index int) []model.ContextMenuItem {
+	if index >= len(m.menus) {
+		return nil
+	}
+	items := []model.ContextMenuItem{
+		{ID: "play", Label: "Play"},
+		{ID: "queue", Label: "Add to Queue"},
+		{Separator: true},
+		{ID: "delete", Label: "Delete"},
+	}
+	// Disable "Favorite" for the first item as a demo
+	if index == 0 {
+		items = append(items, model.ContextMenuItem{ID: "favorite", Label: "Add to Favorites", Disabled: true})
+	} else {
+		items = append(items, model.ContextMenuItem{ID: "favorite", Label: "Add to Favorites"})
+	}
+	return items
+}
+
+func (m *MainMenu) ContextMenuAction(app *model.App, index int, item model.ContextMenuItem) (model.Page, tea.Cmd) {
+	// Show a popup confirming the action
+	menuItem := m.menus[index]
+	popup, _ := model.NewPopup(model.PopupSpec{
+		Title:   "Context Action",
+		Content: fmt.Sprintf("Action '%s' on '%s'", item.Label, menuItem.Title),
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK", IsCancel: true},
+		},
+	})
+	app.ShowPopup(popup)
+	return nil, app.RerenderCmd(true)
 }
 
 type SecondaryMenu struct {

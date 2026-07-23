@@ -26,6 +26,9 @@ func NewMainMenu() *MainMenu {
 		{Title: "Main Menu 3"},
 		{Title: "Main Menu 4"},
 		{Title: "Main Menu 5"},
+		{Title: ""},
+		{Title: "Press 'm' for Markdown preview"},
+		{Title: "Press 'r' for Resizable Markdown demo"},
 	}
 	return m
 }
@@ -133,6 +136,38 @@ func main() {
 > Tip: Press Esc or click outside the popup to dismiss.
 `
 
+const resizeInstructions = `
+
+---
+
+## 🎉 New Feature: Popup Resize!
+
+This popup is **resizable**! Try the following:
+
+### How to Resize
+1. Look at the **bottom-right corner** of this popup
+2. You'll see a **◢** indicator (resize handle)
+3. **Click and drag** the ◢ to resize the popup
+4. Your mouse cursor will change to **↘** (diagonal arrow)
+
+### Features
+- Resize to see more or less content at once
+- Works seamlessly with scrolling
+- Minimum size protection ensures buttons stay visible
+- All content remains readable during resize
+
+### Keyboard Shortcuts
+- **m** - Open standard Markdown preview
+- **r** - Open this resizable demo (you're here!)
+- **Esc** - Close popup
+- **Mouse wheel** - Scroll content
+
+### Try It Now!
+**Drag the bottom-right corner ◢ to make this popup bigger or smaller.**
+
+*This is a Phase 1 MVP feature - more corner handles coming in Phase 2!*
+`
+
 // MarkdownController opens a markdown preview popup when the user presses 'm'.
 type MarkdownController struct {
 	renderer  *glamour.TermRenderer
@@ -144,7 +179,7 @@ func NewMarkdownController() *MarkdownController {
 }
 
 func (c *MarkdownController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, model.Page, tea.Cmd) {
-	if msg.String() != "m" {
+	if msg.String() != "m" && msg.String() != "r" {
 		return false, nil, nil
 	}
 
@@ -158,40 +193,43 @@ func (c *MarkdownController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, m
 		popupWidth = 120
 	}
 
-	// Rebuild renderer on width change or first use
-	if c.renderer == nil || w != c.lastWidth {
-		r, err := glamour.NewTermRenderer(
-			glamour.WithStylePath("dark"),
-			glamour.WithWordWrap(popupWidth),
-			glamour.WithEmoji(),
-			glamour.WithPreservedNewLines(),
-		)
-		if err != nil {
-			return false, nil, nil
-		}
-		c.renderer = r
-		c.lastWidth = w
-	}
-
-	rendered, err := c.renderer.Render(markdownContent)
-	if err != nil {
-		rendered = markdownContent
-	}
-
 	maxH := h * 80 / 100
 	if maxH < 10 {
 		maxH = 10
 	}
 
-	popup, err := model.NewPopup(model.PopupSpec{
-		Title:     "Markdown Preview",
-		Content:   rendered,
-		MaxWidth:  popupWidth + 4,
-		MaxHeight: maxH,
-		Actions: []model.PopupAction{
-			{ID: "ok", Label: "OK"},
-		},
-	})
+	// Use new NewMarkdownPopup API for cleaner code
+	var popup *model.Popup
+	var err error
+
+	if msg.String() == "r" {
+		// Demo: Resizable Markdown popup with instructions
+		popup, err = model.NewMarkdownPopup(model.MarkdownPopupSpec{
+			Title:           "Resizable Markdown Preview",
+			MarkdownContent: markdownContent + resizeInstructions,
+			MarkdownStyle:   "dark",
+			MarkdownEmoji:   true,
+			MaxWidth:        popupWidth,
+			MaxHeight:       maxH,
+			Actions: []model.PopupAction{
+				{ID: "ok", Label: "OK"},
+			},
+		})
+	} else {
+		// Original: Standard Markdown popup
+		popup, err = model.NewMarkdownPopup(model.MarkdownPopupSpec{
+			Title:           "Markdown Preview",
+			MarkdownContent: markdownContent,
+			MarkdownStyle:   "dark",
+			MarkdownEmoji:   true,
+			MaxWidth:        popupWidth,
+			MaxHeight:       maxH,
+			Actions: []model.PopupAction{
+				{ID: "ok", Label: "OK"},
+			},
+		})
+	}
+
 	if err != nil {
 		return false, nil, nil
 	}

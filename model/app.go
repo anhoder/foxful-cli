@@ -26,8 +26,8 @@ type App struct {
 	startup *StartupPage
 	main    *Main
 
-	page       Page     // current page
-	popupStack []*Popup // stack of active popups (topmost is last)
+	page       Page    // current page
+	modalStack []Modal // stack of active modals (popups, context menus); topmost is last
 
 	listeningKBEventL    sync.Mutex
 	listeningMouseEventL sync.Mutex
@@ -174,41 +174,96 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Popup input interception — only the topmost popup receives input.
-	if len(a.popupStack) > 0 {
-		top := a.popupStack[len(a.popupStack)-1]
+	// Modal input interception — only the topmost modal receives input.
+	if len(a.modalStack) > 0 {
+		top := a.modalStack[len(a.modalStack)-1]
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			top.update(msg)
 			if top.dismissed() {
-				a.completeTopPopup()
-			}
-			return a, a.RerenderCmd(true)
-		case tea.MouseMsg:
-			if handled, cmd := top.handleMouse(msg); handled {
-				if top.dismissed() {
-					a.completeTopPopup()
+				page, cmd := a.completeTopModal()
+				if page != nil {
+					a.page = page
 				}
 				cmds := []tea.Cmd{a.RerenderCmd(true)}
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Sequence(cmds...)
+				return a, tea.Batch(cmds...)
 			}
-			// Click outside the topmost popup dismisses it through its cancel
-			// action when present; other mouse events pass through unchanged.
+			return a, a.RerenderCmd(true)
+		case tea.MouseMsg:
+			handled, mouseCmd := top.handleMouse(msg)
+			if handled {
+				if top.dismissed() {
+					page, actionCmd := a.completeTopModal()
+					if page != nil {
+						a.page = page
+					}
+					cmds := []tea.Cmd{a.RerenderCmd(true)}
+					if mouseCmd != nil {
+						cmds = append(cmds, mouseCmd)
+					}
+					if actionCmd != nil {
+						cmds = append(cmds, actionCmd)
+					}
+					return a, tea.Batch(cmds...)
+				}
+				cmds := []tea.Cmd{a.RerenderCmd(true)}
+				if mouseCmd != nil {
+					cmds = append(cmds, mouseCmd)
+				}
+				return a, tea.Batch(cmds...)
+			}
+			// Click outside the topmost modal: dismiss behavior depends on modal type.
 			if _, isClick := msg.(tea.MouseClickMsg); !isClick {
+				// Non-click (e.g. motion) outside the modal is not consumed, but a
+				// returned pointer-reset command must still be honored.
+				if mouseCmd != nil {
+					return a, mouseCmd
+				}
 				return a, nil
 			}
-			if mouse := msg.Mouse(); mouse.Button == tea.MouseLeft {
-				top.dismissCancel(PopupDismissOutsideClick)
-				a.completeTopPopup()
-				return a, a.RerenderCmd(true)
+			mouse := msg.Mouse()
+			if mouse.Button == tea.MouseLeft {
+				// Left-click outside dismisses and consumes the click
+				top.dismissOutside()
+				page, cmd := a.completeTopModal()
+				if page != nil {
+					a.page = page
+				}
+				cmds := []tea.Cmd{a.RerenderCmd(true)}
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, tea.Batch(cmds...)
+			} else if mouse.Button == tea.MouseRight {
+				// Right-click outside: dismiss if modal allows passthrough, then forward to page
+				if top.allowsRightClickPassthrough() {
+					top.dismissOutside()
+					page, modalCmd := a.completeTopModal()
+					if page != nil {
+						a.page = page
+					}
+					// Forward the right-click to the page
+					newPage, pageCmd := a.page.Update(msg, a)
+					if newPage != nil {
+						a.page = newPage
+					}
+					cmds := []tea.Cmd{a.RerenderCmd(true)}
+					if modalCmd != nil {
+						cmds = append(cmds, modalCmd)
+					}
+					if pageCmd != nil {
+						cmds = append(cmds, pageCmd)
+					}
+					return a, tea.Batch(cmds...)
+				}
 			}
 			return a, nil
 		}
 		// Forward non-input messages (ticks, etc.) to the page so it continues
-		// updating while a modal popup is open.
+		// updating while a modal is open.
 	}
 
 	page, cmd := a.page.Update(msg, a)
@@ -228,12 +283,12 @@ func (a *App) View() tea.View {
 	}
 
 	baseContent := a.page.View(a)
-	if len(a.popupStack) == 0 {
+	if len(a.modalStack) == 0 {
 		v.SetContent(baseContent)
 		return v
 	}
 
-	v.SetContent(a.compositePopups(baseContent))
+	v.SetContent(a.compositeModals(baseContent))
 	return v
 }
 
@@ -374,56 +429,73 @@ func (a *App) Quit() {
 	}
 }
 
+func (a *App) pushModal(m Modal) {
+	if m == nil {
+		panic("cannot push a nil modal")
+	}
+	a.modalStack = append(a.modalStack, m)
+}
+
 // ShowPopup pushes a validated popup onto the modal stack.
-// The topmost popup receives input first.
+// The topmost modal receives input first.
 func (a *App) ShowPopup(p *Popup) {
 	if p == nil {
 		panic("cannot show a nil popup")
 	}
-	a.popupStack = append(a.popupStack, p)
+	a.pushModal(p)
 }
 
-// DismissPopup dismisses the topmost popup on the stack.
+// DismissPopup dismisses the topmost modal on the stack.
 // Does nothing if the stack is empty.
 func (a *App) DismissPopup() {
-	if len(a.popupStack) > 0 {
-		a.popupStack = a.popupStack[:len(a.popupStack)-1]
+	if len(a.modalStack) > 0 {
+		a.modalStack = a.modalStack[:len(a.modalStack)-1]
 	}
 }
 
-func (a *App) completeTopPopup() {
-	if len(a.popupStack) == 0 {
-		return
+// completeTopModal pops the topmost modal, calls its complete() method,
+// and returns the resulting (Page, tea.Cmd).
+func (a *App) completeTopModal() (Page, tea.Cmd) {
+	if len(a.modalStack) == 0 {
+		return nil, nil
 	}
-	topIndex := len(a.popupStack) - 1
-	top := a.popupStack[topIndex]
-	result := top.consumeResult()
-	a.popupStack = a.popupStack[:topIndex]
-	if result != nil && top.onResult != nil {
-		top.onResult(*result)
-	}
+	topIndex := len(a.modalStack) - 1
+	top := a.modalStack[topIndex]
+	a.modalStack = a.modalStack[:topIndex]
+	return top.complete(a)
 }
 
-// HasPopup returns whether a popup dialog is currently active.
+// HasPopup returns whether a modal (popup or context menu) is currently active.
 func (a *App) HasPopup() bool {
-	return len(a.popupStack) > 0
+	return len(a.modalStack) > 0
 }
 
-// compositePopups renders the base page content with all popups in the stack
-// overlaid using lipgloss Compositor layers. Popups are rendered in stack
-// order (bottom of stack = back layer, top of stack = front layer). Each
-// popup's position is determined by its Anchor + OffsetX/OffsetY.
-func (a *App) compositePopups(baseContent string) string {
+// compositeModals renders the base page content with all modals in the stack
+// overlaid using lipgloss Compositor layers. Modals are rendered in stack
+// order (bottom of stack = back layer, top of stack = front layer).
+func (a *App) compositeModals(baseContent string) string {
 	w, h := a.WindowWidth(), a.WindowHeight()
+	ss := style.CurrentStyleSet()
 
 	layers := []*layout.Layer{layout.NewLayer(baseContent)}
-	for _, p := range a.popupStack {
-		rendered := p.render(style.CurrentStyleSet().Popup)
-		popupH := lipgloss.Height(rendered.content)
-		popupW := layout.Width(rendered.content)
-		x, y := p.computePosition(w, h, popupW, popupH)
-		p.setBounds(x, y, popupW, popupH, rendered.actionBounds)
-		layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
+	for _, modal := range a.modalStack {
+		// Type-switch to render Popup vs ContextMenu
+		switch m := modal.(type) {
+		case *Popup:
+			rendered := m.render(ss.Popup)
+			popupH := lipgloss.Height(rendered.content)
+			popupW := layout.Width(rendered.content)
+			x, y := m.computePosition(w, h, popupW, popupH)
+			m.setBounds(x, y, popupW, popupH, rendered.actionBounds)
+			layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
+		case *ContextMenu:
+			rendered := m.renderModal(ss)
+			menuH := lipgloss.Height(rendered.content)
+			menuW := layout.Width(rendered.content)
+			x, y := m.computePosition(w, h, menuW, menuH)
+			m.setModalBounds(x, y, menuW, menuH, rendered.itemBounds)
+			layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
+		}
 	}
 	return layout.NewCompositor(layers...).Render()
 }

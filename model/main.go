@@ -1237,6 +1237,27 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 		}
 		return m, a.RerenderCmd(true)
 
+
+	case tea.MouseRight:
+		if !m.mouseInMenuArea(mouse.Y) {
+			break
+		}
+		idx := m.menuItemAt(mouse.X, mouse.Y)
+		if idx < 0 || idx >= len(m.menuList) {
+			break
+		}
+		// Fetch context menu items for this menu item
+		items := m.menu.ContextMenuItems(a, idx)
+		if len(items) == 0 {
+			break
+		}
+		// Highlight the right-clicked item
+		m.selectedIndex = idx
+		// Create and show context menu at mouse position
+		contextMenu := NewContextMenu(m.menu, idx, items, mouse.X, mouse.Y)
+		a.pushModal(contextMenu)
+		return m, a.RerenderCmd(true)
+
 	}
 
 	return m, a.Tick(time.Nanosecond)

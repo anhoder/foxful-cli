@@ -796,7 +796,7 @@ func NewStyleSet(theme Theme) StyleSet {
 			BorderForeground(popupBorder).
 			BorderBackground(popupSurface).
 			Background(popupSurface).
-			Padding(1),
+			Padding(0, 1),
 		Title: applyPopupText(lipgloss.NewStyle(), popupTitleHL, popupSurface).
 			MarginBottom(1),
 		Content: applyPopupText(lipgloss.NewStyle(), popupContentHL, popupSurface),
