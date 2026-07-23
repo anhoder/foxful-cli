@@ -83,6 +83,12 @@ type NotificationTheme struct {
 	// backgrounds are forced to Surface so they cannot fragment the surface.
 	Title   Highlight
 	Message Highlight
+
+	// Per-level icon prefixes (optional; falls back to defaults).
+	InfoIcon    string
+	SuccessIcon string
+	WarningIcon string
+	ErrorIcon   string
 }
 
 // NotificationStyleSet is the resolved, render-ready notification visual surface.
@@ -153,6 +159,8 @@ type Theme struct {
 	Button               Highlight         // fg→Primary
 	ButtonBlurred        Highlight         // fg→Secondary
 	ProgressEmpty        Highlight         // fg→Secondary
+	ScrollTrack          Highlight         // fg→Secondary, scrollbar track (gutter lines)
+	ScrollThumb          Highlight         // fg→Secondary, scrollbar thumb (position indicator)
 	Popup                PopupTheme        // popup-owned surface and interactive states
 	Notification         NotificationTheme // notification-owned surface, borders, icons
 	StatusBar            Highlight         // fg→Secondary, bg→transparent
@@ -192,6 +200,14 @@ type Theme struct {
 // BoolPtr returns a pointer to the given bool value.
 // Used for setting Bold/Italic/Underline on Highlight structs.
 func BoolPtr(b bool) *bool { return &b }
+
+// orString returns a if it is non-empty, otherwise b.
+func orString(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
 
 // ---- terminal background detection (runtime-updatable) ----
 
@@ -712,6 +728,10 @@ func NewStyleSet(theme Theme) StyleSet {
 	popupActionHL := resolveHL(theme.Popup.Action, theme.Primary, theme.Muted)
 	popupActionFocusedHL := resolveHL(theme.Popup.ActionFocused, lipgloss.Color("#FFFFFF"), theme.Primary)
 
+	// Scrollbar: global configurable elements for consistent look across components.
+	scrollTrackHL := resolveHL(theme.ScrollTrack, theme.Secondary, nil)
+	scrollThumbHL := resolveHL(theme.ScrollThumb, theme.Secondary, nil)
+
 	// Status bar
 	statusBarFg := or(theme.StatusBar.Fg, theme.Secondary)
 	statusBarBg := or(theme.StatusBar.Bg, noColor)
@@ -848,12 +868,11 @@ func NewStyleSet(theme Theme) StyleSet {
 			Padding(0, 2),
 		ActionHover: applyHL(lipgloss.NewStyle(), popupActionHoverHL).
 			Padding(0, 2),
-		ScrollTrack: lipgloss.NewStyle().
-			Foreground(theme.Secondary).
-			Background(popupSurface),
-		ScrollThumb: lipgloss.NewStyle().
-			Foreground(theme.Primary).
-			Background(popupSurface),
+		ScrollTrack: applyHL(lipgloss.NewStyle().
+			Background(popupSurface).
+			Faint(true), scrollTrackHL),
+		ScrollThumb: applyHL(lipgloss.NewStyle().
+			Background(popupSurface), scrollThumbHL),
 	}
 
 	// Notification surface: reuse popup-style resolution.
@@ -891,10 +910,10 @@ func NewStyleSet(theme Theme) StyleSet {
 		ErrorFrame:   notifFrame(or(theme.Notification.ErrorBorder, theme.Error)),
 		Title:        applyPopupText(lipgloss.NewStyle(), notifTitleHL, notifSurface),
 		Message:      applyPopupText(lipgloss.NewStyle(), notifMessageHL, notifSurface),
-		InfoIcon:     "ℹ ",
-		SuccessIcon:  "✓ ",
-		WarningIcon:  "⚠ ",
-		ErrorIcon:    "✗ ",
+		InfoIcon:     orString(theme.Notification.InfoIcon, "ℹ "),
+		SuccessIcon:  orString(theme.Notification.SuccessIcon, "✓ "),
+		WarningIcon:  orString(theme.Notification.WarningIcon, "⚠ "),
+		ErrorIcon:    orString(theme.Notification.ErrorIcon, "✗ "),
 	}
 
 	// Semantic colors
