@@ -185,10 +185,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ShowNotificationMsg:
 		return a, a.handleShowNotification(msgWithType.Spec)
 	case notificationExpireMsg:
-		a.removeNotification(msgWithType.id)
+		a.handleExpire(msgWithType.id)
 		return a, a.RerenderCmd(true)
 	case updateNotificationMsg:
-		a.updateNotificationContent(msgWithType.id, msgWithType.spec)
+		cmd := a.updateNotificationContent(msgWithType.id, msgWithType.spec)
+		if cmd != nil {
+			return a, tea.Batch(a.RerenderCmd(true), cmd)
+		}
 		return a, a.RerenderCmd(true)
 	case dismissNotificationMsg:
 		a.removeNotification(msgWithType.id)
@@ -198,14 +201,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.RerenderCmd(true)
 	}
 
-	// Click on a notification dismisses it and consumes the click. Checked
-	// before modal/page routing so notifications (rendered on top) intercept
-	// only clicks that land on their bounds; everything else passes through.
+	// Notification mouse handling — checked before modal/page routing.
+	// Notifications intercept mouse events on their bounds: clicks on title
+	// dismiss, clicks on content handle text selection, motion/release extend
+	// and finalize the selection.
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		if _, isClick := mouseMsg.(tea.MouseClickMsg); isClick {
-			if clickedID := a.notificationAt(mouseMsg.Mouse()); clickedID != 0 {
-				a.removeNotification(clickedID)
-				return a, a.RerenderCmd(true)
+		if notif := a.notificationAt(mouseMsg.Mouse()); notif != nil {
+			consumed, dismiss, notifCmd := notif.handleMouse(mouseMsg)
+			if consumed {
+				var cmds []tea.Cmd
+				if dismiss {
+					a.removeNotification(notif.id)
+					cmds = append(cmds, a.RerenderCmd(true))
+				}
+				if notifCmd != nil {
+					cmds = append(cmds, notifCmd)
+				}
+				if len(cmds) > 0 {
+					return a, tea.Batch(cmds...)
+				}
+				return a, nil
 			}
 		}
 	}
@@ -396,10 +411,17 @@ func (a *App) Rerender(cleanScreen bool) {
 	if a.program == nil {
 		return
 	}
-	// Execute the rerender command and send its result as a message.
-	// Previously we sent the Cmd function itself (which was silently dropped
-	// because a func() tea.Msg is not a recognized message type).
-	a.program.Send(a.RerenderCmd(cleanScreen)())
+	// Send in a goroutine to avoid blocking on the unbuffered msgs channel.
+	// This is called from goroutines (e.g., ticker) and must not deadlock
+	// when the event loop is busy or hasn't started yet.
+	go func() {
+		if cleanScreen {
+			a.program.Send(tea.ClearScreen())
+		}
+		if a.page != nil {
+			a.program.Send(a.page.Msg())
+		}
+	}()
 }
 
 func (a *App) RerenderCmd(cleanScreen bool) tea.Cmd {
@@ -549,7 +571,9 @@ func (a *App) compositeModals(baseContent string) string {
 // is explicitly set. For Warning/Error levels, the notification persists until
 // dismissed manually or replaced by newer notifications beyond the screen limit.
 //
-// Safe to call from goroutines; internally sends a message to the Update loop.
+// Safe to call from goroutines, including during Init(); internally sends a
+// message to the Update loop via a non-blocking goroutine to avoid deadlocks
+// when called before the event loop starts.
 func (a *App) Notify(spec NotificationSpec) NotificationID {
 	if a.program == nil {
 		return 0
@@ -557,34 +581,40 @@ func (a *App) Notify(spec NotificationSpec) NotificationID {
 	// Assign ID optimistically for return (actual assignment happens in Update).
 	// This is a heuristic; for guaranteed ID tracking, use the returned ID.
 	nextID := a.nextNotificationID + 1
-	a.program.Send(ShowNotificationMsg{Spec: spec})
+	go a.program.Send(ShowNotificationMsg{Spec: spec})
 	return nextID
 }
 
 // UpdateNotification updates the content of an existing notification.
 // Does nothing if the ID does not exist.
+//
+// Safe to call from goroutines, including during Init().
 func (a *App) UpdateNotification(id NotificationID, spec NotificationSpec) {
 	if a.program == nil {
 		return
 	}
-	a.program.Send(updateNotificationMsg{id: id, spec: spec})
+	go a.program.Send(updateNotificationMsg{id: id, spec: spec})
 }
 
 // DismissNotification dismisses a specific notification by ID.
 // Does nothing if the ID does not exist.
+//
+// Safe to call from goroutines, including during Init().
 func (a *App) DismissNotification(id NotificationID) {
 	if a.program == nil {
 		return
 	}
-	a.program.Send(dismissNotificationMsg{id: id})
+	go a.program.Send(dismissNotificationMsg{id: id})
 }
 
 // ClearAllNotifications dismisses all visible notifications immediately.
+//
+// Safe to call from goroutines, including during Init().
 func (a *App) ClearAllNotifications() {
 	if a.program == nil {
 		return
 	}
-	a.program.Send(clearAllNotificationsMsg{})
+	go a.program.Send(clearAllNotificationsMsg{})
 }
 
 // handleShowNotification creates a notification and returns a timeout Cmd if needed.
@@ -614,6 +644,7 @@ func (a *App) handleShowNotification(spec NotificationSpec) tea.Cmd {
 	}
 
 	if timeout > 0 {
+		notif.expireAt = time.Now().Add(timeout)
 		cmds = append(cmds, tea.Tick(timeout, func(time.Time) tea.Msg {
 			return notificationExpireMsg{id: id}
 		}))
@@ -632,26 +663,51 @@ func (a *App) removeNotification(id NotificationID) {
 	}
 }
 
-// updateNotificationContent updates the spec of an existing notification.
-func (a *App) updateNotificationContent(id NotificationID, spec NotificationSpec) {
+// handleExpire checks expireAt before removing. When UpdateNotification clears
+// or extends the timeout, stale ticks are ignored because expireAt was updated.
+func (a *App) handleExpire(id NotificationID) {
 	for _, n := range a.notifications {
 		if n.id == id {
-			n.spec = spec
+			if !n.expireAt.IsZero() && time.Now().After(n.expireAt) {
+				a.removeNotification(id)
+			}
 			return
 		}
 	}
 }
 
-// notificationAt returns the ID of the notification at the given mouse position,
-// or 0 if no notification is under the mouse.
-func (a *App) notificationAt(mouse tea.Mouse) NotificationID {
+// updateNotificationContent updates the spec of an existing notification and
+// manages the expiration timeout. For updates, spec.Timeout == 0 means "no
+// auto-expire" (unlike initial creation which falls back to DefaultTimeout for
+// Info/Success). Returns a tea.Tick if a new timeout should be set.
+func (a *App) updateNotificationContent(id NotificationID, spec NotificationSpec) tea.Cmd {
+	for _, n := range a.notifications {
+		if n.id == id {
+			n.spec = spec
+			// Update expiration: 0 means no timeout for updates.
+			if spec.Timeout > 0 {
+				n.expireAt = time.Now().Add(spec.Timeout)
+				return tea.Tick(spec.Timeout, func(time.Time) tea.Msg {
+					return notificationExpireMsg{id: id}
+				})
+			}
+			n.expireAt = time.Time{} // clear expiration
+			return nil
+		}
+	}
+	return nil
+}
+
+// notificationAt returns the notification at the given mouse position,
+// or nil if no notification is under the mouse.
+func (a *App) notificationAt(mouse tea.Mouse) *Notification {
 	for i := len(a.notifications) - 1; i >= 0; i-- {
 		n := a.notifications[i]
 		if n.boundsSet && n.bounds.contains(mouse.X, mouse.Y) {
-			return n.id
+			return n
 		}
 	}
-	return 0
+	return nil
 }
 
 // compositeNotifications overlays all active notifications on top of the base content.
@@ -690,7 +746,7 @@ func (a *App) compositeNotifications(baseContent string) string {
 		n.setBounds(x, y, notifW, notifH)
 
 		layers = append(layers, layout.NewLayer(rendered).X(x).Y(y))
-		currentHeight += notifH + gap
+		currentHeight += notifH
 	}
 
 	return layout.NewCompositor(layers...).Render()
@@ -726,36 +782,61 @@ func (a *App) renderNotification(n *Notification, styles style.NotificationStyle
 
 	var blocks []string
 
-	// Title line (if present): icon + title, truncated if too long.
+	titleHeight := 0
+	titleText := ""
+
+	// Build unified content lines: title (if present) + body lines.
+	var allLines []string
 	if spec.Title != "" {
-		titleText := icon + spec.Title
-		// Truncate with ellipsis if it exceeds contentWidth.
-		titleRunes := []rune(titleText)
-		if len(titleRunes) > contentWidth {
-			titleRunes = append(titleRunes[:contentWidth-1], '…')
-			titleText = string(titleRunes)
+		titleHeight = 1
+		titleText = icon + spec.Title
+		allLines = append(allLines, titleText)
+	}
+	if spec.Message != "" {
+		wrapped := lipgloss.NewStyle().MaxWidth(contentWidth).Render(spec.Message)
+		bodyLines := strings.Split(wrapped, "\n")
+		// Truncate to maxLines if needed, adding ellipsis on the last visible line.
+		if len(bodyLines) > maxLines {
+			bodyLines = bodyLines[:maxLines]
+			lastLine := bodyLines[maxLines-1]
+			lastLine = ansi.Truncate(lastLine, contentWidth-1, "…")
+			bodyLines[maxLines-1] = lastLine
 		}
-		title := styles.Title.Width(contentWidth).Render(titleText)
-		blocks = append(blocks, title)
+		allLines = append(allLines, bodyLines...)
 	}
 
-	// Message body: wrap to contentWidth, then truncate to maxLines.
-	if spec.Message != "" {
-		// Use lipgloss MaxWidth to wrap, preserving ANSI styles.
-		wrapped := lipgloss.NewStyle().MaxWidth(contentWidth).Render(spec.Message)
-		lines := strings.Split(wrapped, "\n")
+	// Cache geometry for hit-testing.
+	n.setContentGeometry(allLines, contentWidth, titleHeight, titleText)
 
-		// Truncate to maxLines if needed, adding ellipsis on the last visible line.
-		if len(lines) > maxLines {
-			lines = lines[:maxLines]
-			lastLine := lines[maxLines-1]
-			// Append ellipsis to the last line. Use ansi.Truncate to ensure we
-			// don't exceed contentWidth after adding the ellipsis.
-			lastLine = ansi.Truncate(lastLine, contentWidth-1, "…")
-			lines[maxLines-1] = lastLine
+	// Apply selection highlight across all content lines.
+	displayLines := allLines
+	if n.hasSelection && len(allLines) > 0 {
+		displayLines = n.applySelectionHighlight(allLines, contentWidth)
+	}
+
+	// Render first line as title (if present), remaining as body.
+	remainingLines := displayLines
+	if titleHeight > 0 && len(displayLines) > 0 {
+		titleLine := displayLines[0]
+		// Truncate title text to fit contentWidth-2 (reserve space for close btn)
+		titleRunes := []rune(titleLine)
+		effectiveWidth := contentWidth - 2
+		if effectiveWidth < 1 {
+			effectiveWidth = 1
 		}
-
-		msg := styles.Message.Width(contentWidth).Render(strings.Join(lines, "\n"))
+		if len(titleRunes) > effectiveWidth {
+			titleRunes = append(titleRunes[:effectiveWidth-1], '…')
+		}
+		truncatedTitle := string(titleRunes)
+		// Render title text left-aligned in contentWidth-2, padded to fill
+		titleRendered := styles.Title.Width(contentWidth - 2).Render(truncatedTitle)
+		// Close button: muted foreground, same background as notification
+		closeBtn := style.CurrentStyleSet().Muted.Copy().Background(styles.Title.GetBackground()).Render(" ✕")
+		blocks = append(blocks, titleRendered+closeBtn)
+		remainingLines = displayLines[1:]
+	}
+	if len(remainingLines) > 0 {
+		msg := styles.Message.Width(contentWidth).Render(strings.Join(remainingLines, "\n"))
 		blocks = append(blocks, msg)
 	}
 
