@@ -2,7 +2,6 @@ package model
 
 import (
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -175,70 +174,41 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Popup input interception — topmost popup blocks keyboard/mouse events
-	// from reaching the underlying page, acting as a true modal dialog stack.
+	// Popup input interception — only the topmost popup receives input.
 	if len(a.popupStack) > 0 {
 		top := a.popupStack[len(a.popupStack)-1]
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
-			top.Update(msg)
-			if top.Dismissed() {
-				result := top.ConsumeResult()
-				if top.OnResult != nil {
-					top.OnResult(*result)
-				}
-				a.popupStack = a.popupStack[:len(a.popupStack)-1]
-				return a, a.RerenderCmd(true)
+			top.update(msg)
+			if top.dismissed() {
+				a.completeTopPopup()
 			}
 			return a, a.RerenderCmd(true)
 		case tea.MouseMsg:
-			if handled, cmd := top.HandleMouse(msg); handled {
-				var cmds []tea.Cmd
-				cmds = append(cmds, a.RerenderCmd(true))
+			if handled, cmd := top.handleMouse(msg); handled {
+				if top.dismissed() {
+					a.completeTopPopup()
+				}
+				cmds := []tea.Cmd{a.RerenderCmd(true)}
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				if top.Dismissed() {
-					result := top.ConsumeResult()
-					if top.OnResult != nil {
-						top.OnResult(*result)
-					}
-					a.popupStack = a.popupStack[:len(a.popupStack)-1]
-				}
 				return a, tea.Sequence(cmds...)
 			}
-			// Click outside topmost popup → dismiss it.
-			// Only dismiss on press (MouseClickMsg), not on release (MouseReleaseMsg),
-			// to avoid double-click creating a popup that immediately dismisses itself
-			// when the second click's release event arrives after the popup is created.
+			// Click outside the topmost popup dismisses it through its cancel
+			// action when present; other mouse events pass through unchanged.
 			if _, isClick := msg.(tea.MouseClickMsg); !isClick {
 				return a, nil
 			}
-			mouse := msg.Mouse()
-			if mouse.Button == tea.MouseLeft {
-				// Trigger cancel button if one exists
-				for _, btn := range top.Buttons {
-					if btn.IsCancel {
-						top.result = &PopupResult{ButtonText: btn.Text, IsCancel: true}
-						result := top.ConsumeResult()
-						if top.OnResult != nil {
-							top.OnResult(*result)
-						}
-						a.popupStack = a.popupStack[:len(a.popupStack)-1]
-						return a, a.RerenderCmd(true)
-					}
-				}
-				// No cancel button: just dismiss
-				a.popupStack = a.popupStack[:len(a.popupStack)-1]
+			if mouse := msg.Mouse(); mouse.Button == tea.MouseLeft {
+				top.dismissCancel(PopupDismissOutsideClick)
+				a.completeTopPopup()
 				return a, a.RerenderCmd(true)
 			}
 			return a, nil
-		case tea.WindowSizeMsg:
-			a.windowHeight = msg.Height
-			a.windowWidth = msg.Width
 		}
-		// Forward non-input messages (ticks, etc.) to the page so
-		// it continues to update its rendering in the background.
+		// Forward non-input messages (ticks, etc.) to the page so it continues
+		// updating while a modal popup is open.
 	}
 
 	page, cmd := a.page.Update(msg, a)
@@ -404,12 +374,13 @@ func (a *App) Quit() {
 	}
 }
 
-// ShowPopup pushes a popup onto the popup stack and returns true.
-// Multiple popups can be active simultaneously; the most recently shown
-// popup is on top and receives input events first.
-func (a *App) ShowPopup(p *Popup) bool {
+// ShowPopup pushes a validated popup onto the modal stack.
+// The topmost popup receives input first.
+func (a *App) ShowPopup(p *Popup) {
+	if p == nil {
+		panic("cannot show a nil popup")
+	}
 	a.popupStack = append(a.popupStack, p)
-	return true
 }
 
 // DismissPopup dismisses the topmost popup on the stack.
@@ -417,6 +388,19 @@ func (a *App) ShowPopup(p *Popup) bool {
 func (a *App) DismissPopup() {
 	if len(a.popupStack) > 0 {
 		a.popupStack = a.popupStack[:len(a.popupStack)-1]
+	}
+}
+
+func (a *App) completeTopPopup() {
+	if len(a.popupStack) == 0 {
+		return
+	}
+	topIndex := len(a.popupStack) - 1
+	top := a.popupStack[topIndex]
+	result := top.consumeResult()
+	a.popupStack = a.popupStack[:topIndex]
+	if result != nil && top.onResult != nil {
+		top.onResult(*result)
 	}
 }
 
@@ -434,20 +418,12 @@ func (a *App) compositePopups(baseContent string) string {
 
 	layers := []*layout.Layer{layout.NewLayer(baseContent)}
 	for _, p := range a.popupStack {
-		popupContent := p.Render(style.CurrentStyleSet())
-
-		popupLines := strings.Split(popupContent, "\n")
-		popupH := len(popupLines)
-		popupW := 0
-		for _, l := range popupLines {
-			if lw := layout.Width(l); lw > popupW {
-				popupW = lw
-			}
-		}
-
+		rendered := p.render(style.CurrentStyleSet().Popup)
+		popupH := lipgloss.Height(rendered.content)
+		popupW := layout.Width(rendered.content)
 		x, y := p.computePosition(w, h, popupW, popupH)
-		p.SetBounds(x, y, popupW, popupH)
-		layers = append(layers, layout.NewLayer(popupContent).X(x).Y(y))
+		p.setBounds(x, y, popupW, popupH, rendered.actionBounds)
+		layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
 	}
 	return layout.NewCompositor(layers...).Render()
 }

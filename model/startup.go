@@ -1,18 +1,14 @@
 package model
 
 import (
-	"fmt"
 	"image/color"
 	"math"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/anhoder/foxful-cli/layout"
-	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/fogleman/ease"
 )
 
@@ -88,12 +84,15 @@ func (s *StartupPage) View(a *App) string {
 	if windowWidth <= 0 || windowHeight <= 0 {
 		return ""
 	}
+	if special, ok := s.startupSpecialView(a); ok {
+		return special
+	}
 
 	content := layout.JoinVertical(
 		lipgloss.Center,
-		s.logoView(a),
+		s.animatedLogoView(a),
 		"",
-		s.tipsView(a),
+		s.startupStatusView(a),
 		"",
 		s.progressView(a),
 	)
@@ -105,44 +104,6 @@ func (s *StartupPage) View(a *App) string {
 	)
 }
 
-func (s *StartupPage) logoView(a *App) string {
-	windowWidth := a.WindowWidth()
-	if windowWidth <= 0 {
-		return ""
-	}
-
-	originLogo := util.GetAlphaAscii(s.options.Welcome)
-
-	// Truncate each line to window width to prevent overflow wrapping
-	// that would break the centered layout on narrow terminals.
-	lines := strings.Split(originLogo, "\n")
-	for i, line := range lines {
-		lines[i] = ansi.TruncateWc(line, windowWidth, "")
-	}
-	originLogo = strings.Join(lines, "\n")
-
-	return lipgloss.NewStyle().
-		Align(lipgloss.Center).
-		Width(windowWidth).
-		Foreground(util.GetPrimaryColor()).
-		Render(originLogo)
-}
-
-func (s *StartupPage) tipsView(a *App) string {
-	windowWidth := a.WindowWidth()
-	if windowWidth <= 0 {
-		return ""
-	}
-
-	tips := fmt.Sprintf("Enter after %.1f seconds...",
-		float64(s.options.LoadingDuration-s.loadedDuration)/float64(time.Second))
-	tips = ansi.TruncateWc(tips, windowWidth, "")
-	return style.CurrentStyleSet().Subtitle.Copy().
-		Align(lipgloss.Center).
-		Width(windowWidth).
-		Render(tips)
-}
-
 func (s *StartupPage) progressView(a *App) string {
 	var width = float64(a.WindowWidth())
 
@@ -152,5 +113,10 @@ func (s *StartupPage) progressView(a *App) string {
 		progressLastWidth = width
 	}
 
-	return Progress(&a.options.ProgressOptions, int(width), int(math.Round(width*s.loadedPercent)), progressRamp)
+	semanticPercent := s.animationProgress()
+	visualPercent := s.loadedPercent
+	if s.options.ReducedMotion {
+		visualPercent = semanticPercent
+	}
+	return Progress(&a.options.ProgressOptions, int(width), int(math.Round(width*visualPercent)), progressRamp)
 }

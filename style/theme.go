@@ -36,6 +36,38 @@ type Highlight struct {
 	Underline *bool       // Underline attribute. nil = not set.
 }
 
+// PopupTheme groups every visual token owned by a popup surface.
+// Surface is the sole background for non-interactive popup content.
+type PopupTheme struct {
+	Surface color.Color // nil → Theme.Surface → Theme.Background → adaptive default
+	Border  color.Color // nil → Theme.Border → Theme.Accent
+
+	// Title and Content apply only foreground and text attributes. Their
+	// Highlight.Bg values are deliberately ignored so they cannot fragment the
+	// popup surface.
+	Title   Highlight
+	Content Highlight
+
+	// Action backgrounds are intentional interactive-state affordances.
+	Action        Highlight
+	ActionFocused Highlight
+	ActionHover   Highlight
+}
+
+// PopupStyleSet is the resolved, render-ready popup visual surface.
+type PopupStyleSet struct {
+	Surface color.Color
+
+	Frame         lipgloss.Style
+	Title         lipgloss.Style
+	Content       lipgloss.Style
+	Action        lipgloss.Style
+	ActionFocused lipgloss.Style
+	ActionHover   lipgloss.Style
+	ScrollTrack   lipgloss.Style
+	ScrollThumb   lipgloss.Style
+}
+
 // BuiltinHighlightPresets defines named highlight presets that can be referenced
 // via Highlight.Preset. Users can override or extend these via Theme.HighlightPresets.
 // Preset values act as defaults — explicit fields on the Highlight take precedence.
@@ -74,30 +106,26 @@ type Theme struct {
 	// Nil Fg/Bg fall back to the defaults documented below.
 	// Nil Bold/Italic/Underline means "use the element's default" (usually false).
 
-	Title                Highlight // fg→Primary, bold→true
-	MenuTitle            Highlight // fg→Primary
-	MenuItem             Highlight // fg→nil (terminal default), bg→transparent
-	SelectedItem         Highlight // fg→Primary, bg→computed from Primary blend
-	Subtitle             Highlight // fg→Secondary
-	Prompt               Highlight // fg→Primary
-	BackButton           Highlight // fg→Secondary, bold→true
-	Breadcrumb           Highlight // fg→Muted, bg→computed from Surface (used by status bar)
-	Button               Highlight // fg→Primary
-	ButtonBlurred        Highlight // fg→Secondary
-	ProgressEmpty        Highlight // fg→Secondary
-	Popup                Highlight // Bg→Surface, border color uses base Border field
-	PopupTitle           Highlight // fg→Primary, bold→true
-	PopupButton          Highlight // fg→Primary, bg→Muted
-	PopupButtonFocused   Highlight // fg→#FFFFFF, bg→Primary, underline→true
-	PopupDim             Highlight // fg→Secondary
-	StatusBar            Highlight // fg→Secondary, bg→transparent
-	StatusBarText        Highlight // fg→Secondary
-	StatusBarBreadcrumb  Highlight // fg→Muted, bg→computed (falls back to StatusBarTime.Bg)
-	StatusBarTime        Highlight // fg→Muted, bg→computed from Surface blend
-	StatusBarNugget      Highlight // fg→Foreground (or white on dark), bg→transparent
-	StatusBarNuggetLabel Highlight // fg→same as StatusBarNugget.Fg, bg→Primary
-	AppBackground        Highlight // Bg→transparent (terminal shows through)
-	MenuBg               Highlight // Bg→transparent (falls back to AppBackground.Bg)
+	Title                Highlight  // fg→Primary, bold→true
+	MenuTitle            Highlight  // fg→Primary
+	MenuItem             Highlight  // fg→nil (terminal default), bg→transparent
+	SelectedItem         Highlight  // fg→Primary, bg→computed from Primary blend
+	Subtitle             Highlight  // fg→Secondary
+	Prompt               Highlight  // fg→Primary
+	BackButton           Highlight  // fg→Secondary, bold→true
+	Breadcrumb           Highlight  // fg→Muted, bg→computed from Surface (used by status bar)
+	Button               Highlight  // fg→Primary
+	ButtonBlurred        Highlight  // fg→Secondary
+	ProgressEmpty        Highlight  // fg→Secondary
+	Popup                PopupTheme // popup-owned surface and interactive states
+	StatusBar            Highlight  // fg→Secondary, bg→transparent
+	StatusBarText        Highlight  // fg→Secondary
+	StatusBarBreadcrumb  Highlight  // fg→Muted, bg→computed (falls back to StatusBarTime.Bg)
+	StatusBarTime        Highlight  // fg→Muted, bg→computed from Surface blend
+	StatusBarNugget      Highlight  // fg→Foreground (or white on dark), bg→transparent
+	StatusBarNuggetLabel Highlight  // fg→same as StatusBarNugget.Fg, bg→Primary
+	AppBackground        Highlight  // Bg→transparent (terminal shows through)
+	MenuBg               Highlight  // Bg→transparent (falls back to AppBackground.Bg)
 
 	// ---- Hover/click highlights (interactive states) ----
 	// Each field below controls the visual feedback when the mouse hovers or
@@ -108,7 +136,6 @@ type Theme struct {
 	StatusBarBreadcrumbHover Highlight // fg→computed (lighten/darken), bg→computed, bold→true, underline→true
 	StatusBarBreadcrumbClick Highlight // fg→computed (stronger), bg→computed, bold→true, underline→true
 	BackButtonHover          Highlight // fg→BackButton.Fg, bold→true
-	PopupButtonHover         Highlight // fg→PopupButton.Fg, bg→PopupButton.Bg, underline→true
 
 	// HighlightPresets allows users to define named highlight presets that can
 	// be referenced via Highlight.Preset on any Highlight field. User-defined
@@ -351,33 +378,8 @@ type StyleSet struct {
 	// Border is the style for decorative borders.
 	Border lipgloss.Style
 
-	// PopupBase is the container style for popup dialogs.
-	// Default: rounded border, accent-colored border, 1-cell padding.
-	PopupBase lipgloss.Style
-
-	// PopupTitle styles the popup title text.
-	// Default: bold, primary color, left-aligned within the popup.
-	PopupTitle lipgloss.Style
-
-	// PopupBody styles the message/body text.
-	// Default: normal weight, default foreground.
-	PopupBody lipgloss.Style
-
-	// PopupButton styles a regular (unfocused) button.
-	// Default: secondary color, "[ text ]" format applied by the caller.
-	PopupButton lipgloss.Style
-
-	// PopupButtonFocused styles the focused/active button.
-	// Default: primary color with reverse background.
-	PopupButtonFocused lipgloss.Style
-
-	// PopupButtonHover styles a popup button when the mouse hovers over it.
-	// Default: same as PopupButton but with underline for clickability cue.
-	PopupButtonHover lipgloss.Style
-
-	// PopupDim dims background content behind the popup.
-	// Default: BrightBlack foreground.
-	PopupDim lipgloss.Style
+	// Popup is the complete resolved visual surface for popup dialogs.
+	Popup PopupStyleSet
 
 	// Success is the style for success/positive messages.
 	Success lipgloss.Style
@@ -485,6 +487,12 @@ func NewStyleSet(theme Theme) StyleSet {
 		return s
 	}
 
+	// Popup title/body text must never be able to override PopupTheme.Surface.
+	applyPopupText := func(s lipgloss.Style, hl Highlight, surface color.Color) lipgloss.Style {
+		hl.Bg = nil
+		return applyHL(s, hl).Background(surface)
+	}
+
 	// ---- Resolve Highlight defaults ----
 
 	// resolvePreset merges a named preset (if set) into the Highlight.
@@ -553,11 +561,11 @@ func NewStyleSet(theme Theme) StyleSet {
 	theme.Button = resolvePreset(theme.Button)
 	theme.ButtonBlurred = resolvePreset(theme.ButtonBlurred)
 	theme.ProgressEmpty = resolvePreset(theme.ProgressEmpty)
-	theme.Popup = resolvePreset(theme.Popup)
-	theme.PopupTitle = resolvePreset(theme.PopupTitle)
-	theme.PopupButton = resolvePreset(theme.PopupButton)
-	theme.PopupButtonFocused = resolvePreset(theme.PopupButtonFocused)
-	theme.PopupDim = resolvePreset(theme.PopupDim)
+	theme.Popup.Title = resolvePreset(theme.Popup.Title)
+	theme.Popup.Content = resolvePreset(theme.Popup.Content)
+	theme.Popup.Action = resolvePreset(theme.Popup.Action)
+	theme.Popup.ActionFocused = resolvePreset(theme.Popup.ActionFocused)
+	theme.Popup.ActionHover = resolvePreset(theme.Popup.ActionHover)
 	theme.StatusBar = resolvePreset(theme.StatusBar)
 	theme.StatusBarText = resolvePreset(theme.StatusBarText)
 	theme.StatusBarBreadcrumb = resolvePreset(theme.StatusBarBreadcrumb)
@@ -571,7 +579,6 @@ func NewStyleSet(theme Theme) StyleSet {
 	theme.StatusBarBreadcrumbHover = resolvePreset(theme.StatusBarBreadcrumbHover)
 	theme.StatusBarBreadcrumbClick = resolvePreset(theme.StatusBarBreadcrumbClick)
 	theme.BackButtonHover = resolvePreset(theme.BackButtonHover)
-	theme.PopupButtonHover = resolvePreset(theme.PopupButtonHover)
 
 	// Transparent sentinel
 	var noColor color.Color = lipgloss.NoColor{}
@@ -642,18 +649,26 @@ func NewStyleSet(theme Theme) StyleSet {
 	progressEmptyHL := resolveHL(theme.ProgressEmpty, theme.Secondary, nil)
 
 	// Popup
-	popupBg := or(theme.Popup.Bg, theme.Surface)
+	popupSurface := or(theme.Popup.Surface, theme.Surface)
+	if popupSurface == nil {
+		popupSurface = theme.Background
+	}
+	if popupSurface == nil {
+		if detectedDarkBg {
+			popupSurface = lipgloss.Color("#242424")
+		} else {
+			popupSurface = lipgloss.Color("#F5F5F5")
+		}
+	}
 	borderColor := or(theme.Border, theme.Accent)
-	popupTitleHL := resolveHL(theme.PopupTitle, theme.Primary, nil)
+	popupBorder := or(theme.Popup.Border, borderColor)
+	popupTitleHL := resolveHL(theme.Popup.Title, theme.Primary, nil)
 	if popupTitleHL.Bold == nil {
 		popupTitleHL.Bold = BoolPtr(true)
 	}
-
-	popupButtonFg := or(theme.PopupButton.Fg, theme.Primary)
-	popupButtonBg := or(theme.PopupButton.Bg, theme.Muted)
-	popupButtonFocusedFg := or(theme.PopupButtonFocused.Fg, lipgloss.Color("#FFFFFF"))
-	popupButtonFocusedBg := or(theme.PopupButtonFocused.Bg, theme.Primary)
-	popupDimFg := or(theme.PopupDim.Fg, theme.Secondary)
+	popupContentHL := resolveHL(theme.Popup.Content, theme.Foreground, nil)
+	popupActionHL := resolveHL(theme.Popup.Action, theme.Primary, theme.Muted)
+	popupActionFocusedHL := resolveHL(theme.Popup.ActionFocused, lipgloss.Color("#FFFFFF"), theme.Primary)
 
 	// Status bar
 	statusBarFg := or(theme.StatusBar.Fg, theme.Secondary)
@@ -737,10 +752,10 @@ func NewStyleSet(theme Theme) StyleSet {
 		backButtonHoverHL.Bold = BoolPtr(true)
 	}
 
-	// PopupButtonHover: fg/bg defaults to the unfocused button colors, underline for clickability cue
-	popupButtonHoverHL := resolveHL(theme.PopupButtonHover, popupButtonFg, popupButtonBg)
-	if popupButtonHoverHL.Underline == nil {
-		popupButtonHoverHL.Underline = BoolPtr(true)
+	// Popup action hover: action fg/bg plus an underline cue by default.
+	popupActionHoverHL := resolveHL(theme.Popup.ActionHover, popupActionHL.Fg, popupActionHL.Bg)
+	if popupActionHoverHL.Underline == nil {
+		popupActionHoverHL.Underline = BoolPtr(true)
 	}
 
 	// ---- Build StyleSet ----
@@ -774,32 +789,30 @@ func NewStyleSet(theme Theme) StyleSet {
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
-	base.PopupBase = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Background(popupBg).
-		Padding(1)
-
-	base.PopupTitle = applyHL(lipgloss.NewStyle(), popupTitleHL).
-		MarginBottom(1)
-
-	base.PopupBody = lipgloss.NewStyle()
-
-	base.PopupButton = lipgloss.NewStyle().
-		Foreground(popupButtonFg).
-		Background(popupButtonBg).
-		Padding(0, 3).
-		MarginLeft(2).
-		MarginRight(2).
-		MarginTop(1)
-
-	base.PopupButtonFocused = base.PopupButton.
-		Foreground(popupButtonFocusedFg).
-		Background(popupButtonFocusedBg)
-
-	base.PopupButtonHover = applyHL(base.PopupButton, popupButtonHoverHL)
-
-	base.PopupDim = applyHL(lipgloss.NewStyle(), Highlight{Fg: popupDimFg})
+	base.Popup = PopupStyleSet{
+		Surface: popupSurface,
+		Frame: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(popupBorder).
+			BorderBackground(popupSurface).
+			Background(popupSurface).
+			Padding(1),
+		Title: applyPopupText(lipgloss.NewStyle(), popupTitleHL, popupSurface).
+			MarginBottom(1),
+		Content: applyPopupText(lipgloss.NewStyle(), popupContentHL, popupSurface),
+		Action: applyHL(lipgloss.NewStyle(), popupActionHL).
+			Padding(0, 2),
+		ActionFocused: applyHL(lipgloss.NewStyle(), popupActionFocusedHL).
+			Padding(0, 2),
+		ActionHover: applyHL(lipgloss.NewStyle(), popupActionHoverHL).
+			Padding(0, 2),
+		ScrollTrack: lipgloss.NewStyle().
+			Foreground(theme.Secondary).
+			Background(popupSurface),
+		ScrollThumb: lipgloss.NewStyle().
+			Foreground(theme.Primary).
+			Background(popupSurface),
+	}
 
 	// Semantic colors
 	base.Success = lipgloss.NewStyle().Foreground(theme.Success)

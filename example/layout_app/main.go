@@ -32,6 +32,14 @@ type layoutTickMsg struct{}
 
 var mainMenu = NewMainMenu()
 
+func mustPopup(spec model.PopupSpec) *model.Popup {
+	popup, err := model.NewPopup(spec)
+	if err != nil {
+		panic(err)
+	}
+	return popup
+}
+
 type MainMenu struct {
 	model.DefaultMenu
 	menus []model.MenuItem
@@ -48,9 +56,9 @@ func NewMainMenu() *MainMenu {
 	return m
 }
 
-func (m *MainMenu) IsSearchable() bool             { return true }
-func (m *MainMenu) GetMenuKey() string              { return "layout_main_menu" }
-func (m *MainMenu) MenuViews() []model.MenuItem     { return m.menus }
+func (m *MainMenu) IsSearchable() bool                     { return true }
+func (m *MainMenu) GetMenuKey() string                     { return "layout_main_menu" }
+func (m *MainMenu) MenuViews() []model.MenuItem            { return m.menus }
 func (m *MainMenu) SubMenu(_ *model.App, _ int) model.Menu { return nil }
 
 // ── LayoutController ────────────────────────────────────────────────
@@ -111,13 +119,16 @@ func showGridPopup(a *model.App) {
 		Padding(1, 2).
 		Render(grid)
 
-	buttons := []model.PopupButton{
-		{Text: "OK"},
-		{Text: "Cancel", IsCancel: true},
-	}
-
-	popup := model.NewCustomPopup("Layout Demo", box, buttons, func(r model.PopupResult) {
-		_ = styles.Muted.Render("popup dismissed") // noop
+	popup := mustPopup(model.PopupSpec{
+		Title:   "Layout Demo",
+		Content: box,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+			{ID: "cancel", Label: "Cancel", IsCancel: true},
+		},
+		OnResult: func(model.PopupResult) {
+			_ = styles.Muted.Render("popup dismissed")
+		},
 	})
 	a.ShowPopup(popup)
 }
@@ -143,12 +154,16 @@ func showPlaceCenterPopup(a *model.App) {
 		Padding(1, 2).
 		Render(centered)
 
-	popup := model.NewCustomPopup(
-		"PlaceCenter Demo",
-		box,
-		[]model.PopupButton{{Text: "OK"}},
-		func(r model.PopupResult) { _ = styles.Muted.Render("") },
-	)
+	popup := mustPopup(model.PopupSpec{
+		Title:   "PlaceCenter Demo",
+		Content: box,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+		},
+		OnResult: func(model.PopupResult) {
+			_ = styles.Muted.Render("")
+		},
+	})
 	a.ShowPopup(popup)
 }
 
@@ -175,12 +190,16 @@ func showJoinPopup(a *model.App) {
 
 	stack := layout.JoinVertical(layout.Left, c1, c2, c3)
 
-	popup := model.NewCustomPopup(
-		"Join Demo",
-		stack,
-		[]model.PopupButton{{Text: "OK"}},
-		func(r model.PopupResult) { _ = styles.Muted.Render("") },
-	)
+	popup := mustPopup(model.PopupSpec{
+		Title:   "Join Demo",
+		Content: stack,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+		},
+		OnResult: func(model.PopupResult) {
+			_ = styles.Muted.Render("")
+		},
+	})
 	a.ShowPopup(popup)
 }
 
@@ -310,8 +329,8 @@ func (p *LayoutPage) View(a *model.App) string {
 
 func main() {
 	ops := model.DefaultOptions()
-	ops.EnableStartup = false                           // skip the 2-second startup animation
-	ops.WhetherDisplayTitle = true                      // show the app name title bar
+	ops.EnableStartup = false      // skip the 2-second startup animation
+	ops.WhetherDisplayTitle = true // show the app name title bar
 	ops.AppName = "Layout Demo"
 	ops.KBControllers = []model.KeyboardController{&LayoutController{}}
 	ops.Ticker = model.DefaultTicker(500 * time.Millisecond) // keeps the footer clock ticking

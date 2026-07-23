@@ -21,9 +21,9 @@ type Options struct {
 	MaxMenuStartRow     int  // Max number of rows occupied by the title section before the menu. 0 means no limit.
 	BottomHeight        int  // Height of the bottom area reserved for components (e.g. spectrum, lyrics, progress bar). Only effective when DynamicRowCount is true. 0 means use the default.
 	CenterEverything    bool // If true, everything will be centered. Otherwise, use default layout.
-	HideMenu    bool
-	DarkTheme   style.Theme // Dark variant for adaptive theme pair. If zero-valued, DefaultTheme is used.
-	LightTheme  style.Theme // Light variant for adaptive theme pair. If zero-valued, DefaultTheme is used.
+	HideMenu            bool
+	DarkTheme           style.Theme // Dark variant for adaptive theme pair. If zero-valued, DefaultTheme is used.
+	LightTheme          style.Theme // Light variant for adaptive theme pair. If zero-valued, DefaultTheme is used.
 
 	TeaOptions []tea.ProgramOption // Tea program options
 
@@ -52,16 +52,27 @@ type StartupOptions struct {
 	TickDuration      time.Duration
 	ProgressOutBounce bool
 	Welcome           string
+
+	// Animation selects the startup visual. The default Sequence combines
+	// typewriter, fade, rainbow sweep, glitch, spinner, and staged status text.
+	// See the StartupAnimation constants for all available effects.
+	Animation StartupAnimation
+	// ReducedMotion renders a static, readable final frame. It is useful for
+	// accessibility, automated environments, and slow remote terminals.
+	ReducedMotion bool
 }
 
 func DefaultOptions() *Options {
 	return &Options{
 		StartupOptions: StartupOptions{
-			EnableStartup:     true,
-			LoadingDuration:   time.Second * 2,
-			TickDuration:      time.Millisecond * 16,
+			EnableStartup:   true,
+			LoadingDuration: time.Second * 2,
+			// The startup renderer updates complete lines. 20 FPS keeps effects
+			// smooth while remaining suitable for SSH and low-power terminals.
+			TickDuration:      time.Millisecond * 50,
 			ProgressOutBounce: true,
 			Welcome:           util.PkgName,
+			Animation:         StartupAnimationSequence,
 		},
 		ProgressOptions: ProgressOptions{
 			EmptyCharWhenFirst: '.',

@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"charm.land/glamour/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"github.com/anhoder/foxful-cli/model"
 )
 
@@ -31,8 +31,8 @@ func NewMainMenu() *MainMenu {
 }
 
 func (m *MainMenu) IsSearchable() bool          { return true }
-func (m *MainMenu) GetMenuKey() string           { return "main_menu" }
-func (m *MainMenu) MenuViews() []model.MenuItem  { return m.menus }
+func (m *MainMenu) GetMenuKey() string          { return "main_menu" }
+func (m *MainMenu) MenuViews() []model.MenuItem { return m.menus }
 
 func (m *MainMenu) SubMenu(_ *model.App, index int) model.Menu {
 	if index >= len(m.menus) {
@@ -56,8 +56,8 @@ func NewSubMenu() *SubMenu {
 	}
 }
 
-func (m *SubMenu) GetMenuKey() string               { return "sub_menu" }
-func (m *SubMenu) MenuViews() []model.MenuItem      { return m.menus }
+func (m *SubMenu) GetMenuKey() string                     { return "sub_menu" }
+func (m *SubMenu) MenuViews() []model.MenuItem            { return m.menus }
 func (m *SubMenu) SubMenu(_ *model.App, _ int) model.Menu { return nil }
 
 const markdownContent = `
@@ -183,13 +183,18 @@ func (c *MarkdownController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, m
 		maxH = 10
 	}
 
-	popup := model.NewCustomPopup("Markdown Preview", rendered, []model.PopupButton{
-		{Text: "OK"},
-	}, nil)
-
-	popup.Anchor = model.AnchorCenter
-	popup.MaxHeight = maxH
-	popup.MaxWidth = popupWidth
+	popup, err := model.NewPopup(model.PopupSpec{
+		Title:     "Markdown Preview",
+		Content:   rendered,
+		MaxWidth:  popupWidth + 4,
+		MaxHeight: maxH,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+		},
+	})
+	if err != nil {
+		return false, nil, nil
+	}
 	a.ShowPopup(popup)
 	return true, nil, a.RerenderCmd(true)
 }

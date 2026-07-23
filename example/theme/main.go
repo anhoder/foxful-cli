@@ -16,6 +16,14 @@ import (
 // It demonstrates accessing custom styles via style.CurrentStyleSet().Custom.
 type ThemeController struct{}
 
+func mustPopup(spec model.PopupSpec) *model.Popup {
+	popup, err := model.NewPopup(spec)
+	if err != nil {
+		panic(err)
+	}
+	return popup
+}
+
 func (c *ThemeController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, model.Page, tea.Cmd) {
 	k := msg.String()
 	if k != "t" && k != "T" {
@@ -52,9 +60,12 @@ func (c *ThemeController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, mode
 		fmt.Sprintf("  Time: %s", now),
 	)
 
-	popup := model.NewCustomPopup("", body, []model.PopupButton{
-		{Text: "OK"},
-	}, nil)
+	popup := mustPopup(model.PopupSpec{
+		Content: body,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+		},
+	})
 	a.ShowPopup(popup)
 
 	return true, nil, a.RerenderCmd(true)
@@ -98,9 +109,13 @@ func (m *MainMenu) Action(app *model.App, index int) (model.Page, tea.Cmd) {
 		body += fmt.Sprintf("\nSelected index: %d", index)
 		body += "\n\nUse this for popups, logging, API calls, or any\narbitrary logic that shouldn't navigate to a submenu."
 
-		popup := model.NewCustomPopup("Action Fired", body, []model.PopupButton{
-			{Text: "Got It"},
-		}, nil)
+		popup := mustPopup(model.PopupSpec{
+			Title:   "Action Fired",
+			Content: body,
+			Actions: []model.PopupAction{
+				{ID: "got-it", Label: "Got It"},
+			},
+		})
 		app.ShowPopup(popup)
 		return nil, app.RerenderCmd(true)
 	}
@@ -132,11 +147,11 @@ func main() {
 	// ── Step 3: Apply presets to Highlight fields ──
 	// Use the Preset field to reference a built-in or custom preset.
 	// Explicit fields (like Fg here on Subtitle) override preset values.
-	theme.StatusBar.Preset = "normal"           // uses built-in "normal" preset
-	theme.SelectedItem.Preset = "normal"        // uses built-in "normal" preset
+	theme.StatusBar.Preset = "normal"                 // uses built-in "normal" preset
+	theme.SelectedItem.Preset = "normal"              // uses built-in "normal" preset
 	theme.SelectedItem.Fg = lipgloss.Color("#00D7FF") // override preset with explicit Fg
-	theme.BackButton.Preset = "bold"            // uses built-in "bold" preset
-	theme.PopupTitle.Preset = "accent"          // uses custom "accent" preset
+	theme.BackButton.Preset = "bold"                  // uses built-in "bold" preset
+	theme.Popup.Title.Preset = "accent"               // uses custom "accent" preset
 
 	// StatusBar gets a dark background via explicit field (preset doesn't set Bg)
 	theme.StatusBar.Bg = lipgloss.Color("#1E1E1E")
@@ -149,10 +164,10 @@ func main() {
 	// ── Step 4: Configure hover highlight overrides ──
 	// Hover highlights control mouse hover feedback for interactive elements.
 	// Each has sensible defaults derived from the element's normal style.
-	theme.MenuItemHover.Fg = lipgloss.Color("#FF5F87")       // hovered menu items turn accent
-	theme.MenuItemHover.Underline = style.BoolPtr(false)       // disable default underline
-	theme.BackButtonHover.Fg = lipgloss.Color("#00D7FF")      // hovered back button color
-	theme.SelectedItemHover.Underline = style.BoolPtr(true)    // underline selected item on hover
+	theme.MenuItemHover.Fg = lipgloss.Color("#FF5F87")      // hovered menu items turn accent
+	theme.MenuItemHover.Underline = style.BoolPtr(false)    // disable default underline
+	theme.BackButtonHover.Fg = lipgloss.Color("#00D7FF")    // hovered back button color
+	theme.SelectedItemHover.Underline = style.BoolPtr(true) // underline selected item on hover
 
 	// ── Step 5: Add custom domain colors.
 	theme.Custom = map[string]color.Color{

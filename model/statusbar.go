@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/anhoder/foxful-cli/style"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // StatusBar is the interface for the bottom status bar.
@@ -17,6 +18,8 @@ type StatusBar interface {
 // DefaultStatusBar shows a "PATH" nugget, the breadcrumb path on bar background,
 // and the current time on the right, in a lipgloss nugget-style status bar.
 type DefaultStatusBar struct{}
+
+const maxBreadcrumbSegmentWidth = 32
 
 func (d *DefaultStatusBar) View(a *App, m *Main) string {
 	w := a.WindowWidth()
@@ -118,8 +121,8 @@ func computeBreadcrumbSegments(m *Main) []breadcrumbSegmentInfo {
 			displayTitle = title
 		} else {
 			displayTitle = title
-			if lipgloss.Width(displayTitle) > 15 {
-				displayTitle = lipgloss.NewStyle().Width(12).MaxWidth(12).Render(displayTitle) + "\u2026"
+			if lipgloss.Width(displayTitle) > maxBreadcrumbSegmentWidth {
+				displayTitle = ansi.Truncate(displayTitle, maxBreadcrumbSegmentWidth, "…")
 			}
 		}
 

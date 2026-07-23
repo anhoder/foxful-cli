@@ -18,6 +18,14 @@ import (
 
 var mainMenu = NewMainMenu()
 
+func mustPopup(spec model.PopupSpec) *model.Popup {
+	popup, err := model.NewPopup(spec)
+	if err != nil {
+		panic(err)
+	}
+	return popup
+}
+
 func showAnchoredPopup(a *model.App, anchor model.PopupAnchor, offsetX, offsetY int) {
 	var anchorName string
 	switch anchor {
@@ -40,58 +48,68 @@ func showAnchoredPopup(a *model.App, anchor model.PopupAnchor, offsetX, offsetY 
 	}
 
 	msg := fmt.Sprintf("This popup is anchored at %s.\nOffset: (%d, %d)\n\nPress ESC to dismiss.", anchorName, offsetX, offsetY)
-	popup := model.NewConfirmPopup(
-		fmt.Sprintf("Anchor: %s", anchorName),
-		msg,
-		func(r model.PopupResult) {
-			_ = style.Dim("dismissed") // noop
+	popup := mustPopup(model.PopupSpec{
+		Title:   fmt.Sprintf("Anchor: %s", anchorName),
+		Content: msg,
+		Actions: []model.PopupAction{
+			{ID: "confirm", Label: "Confirm"},
+			{ID: "cancel", Label: "Cancel", IsCancel: true},
 		},
-	)
-	popup.Anchor = anchor
-	popup.OffsetX = offsetX
-	popup.OffsetY = offsetY
+		Anchor:  anchor,
+		OffsetX: offsetX,
+		OffsetY: offsetY,
+		OnResult: func(model.PopupResult) {
+			_ = style.Dim("dismissed")
+		},
+	})
 	a.ShowPopup(popup)
 }
 
 func stackTwoPopups(a *model.App) {
 	// Track whether bottom popup has been dismissed
 	// First popup: bottom layer
-	bottom := model.NewConfirmPopup(
-		"Bottom Popup",
-		"Bottom popup — press ESC to dismiss me first",
-		func(r model.PopupResult) {
-			_ = style.Dim("bottom dismissed") // noop
+	bottom := mustPopup(model.PopupSpec{
+		Title:   "Bottom Popup",
+		Content: "Bottom popup — press ESC to dismiss me first",
+		Actions: []model.PopupAction{
+			{ID: "confirm", Label: "Confirm"},
+			{ID: "cancel", Label: "Cancel", IsCancel: true},
 		},
-	)
-	bottom.Anchor = model.AnchorBottomCenter
+		Anchor: model.AnchorBottomCenter,
+		OnResult: func(model.PopupResult) {
+			_ = style.Dim("bottom dismissed")
+		},
+	})
 	a.ShowPopup(bottom)
 
-	// Second popup: top layer (shown immediately, blocking the first)
-	top := model.NewConfirmPopup(
-		"Top Popup",
-		"Top popup — I block the one below!\n\nPress ESC to dismiss me first, then dismiss the bottom one.",
-		func(r model.PopupResult) {
-			_ = style.Dim("top dismissed") // noop
+	top := mustPopup(model.PopupSpec{
+		Title:   "Top Popup",
+		Content: "Top popup — I block the one below!\n\nPress ESC to dismiss me first, then dismiss the bottom one.",
+		Actions: []model.PopupAction{
+			{ID: "confirm", Label: "Confirm"},
+			{ID: "cancel", Label: "Cancel", IsCancel: true},
 		},
-	)
-	top.Anchor = model.AnchorCenter
+		OnResult: func(model.PopupResult) {
+			_ = style.Dim("top dismissed")
+		},
+	})
 	a.ShowPopup(top)
 }
 
 func showConfirmPopup(a *model.App) {
-	// Ultra simple popup — just a plain text to test rendering
 	body := "Press ENTER to confirm, ESC to cancel.\n\nThis is a simple popup test."
-	a.ShowPopup(model.NewCustomPopup(
-		"Test Popup",
-		body,
-		[]model.PopupButton{
-			{Text: "OK"},
-			{Text: "Cancel", IsCancel: true},
+	popup := mustPopup(model.PopupSpec{
+		Title:   "Test Popup",
+		Content: body,
+		Actions: []model.PopupAction{
+			{ID: "ok", Label: "OK"},
+			{ID: "cancel", Label: "Cancel", IsCancel: true},
 		},
-		func(r model.PopupResult) {
-			_ = style.Dim("dismissed") // noop
+		OnResult: func(model.PopupResult) {
+			_ = style.Dim("dismissed")
 		},
-	))
+	})
+	a.ShowPopup(popup)
 }
 
 type MainMenu struct {
