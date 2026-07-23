@@ -149,6 +149,12 @@ type Popup struct {
 	// so hover changes only emit an escape when the shape actually changes.
 	pointerShape string
 
+	// Terminal dimensions, updated by App during render. Used during title-bar
+	// drag to detect which boundaries have been reached so the cursor can show
+	// the remaining allowable directions (e.g. "e-resize" when at the left edge).
+	termWidth  int
+	termHeight int
+
 	// Rendering geometry captured on each render(), popup-relative unless the
 	// name says otherwise. Used by handleMouse to hit-test the scrollbar and
 	// content region. scrollbarRelX is -1 when the content is not scrollable.
@@ -219,6 +225,13 @@ func NewPopup(spec PopupSpec) (*Popup, error) {
 		disableResize: spec.DisableResize,
 		hoveredAction: -1,
 	}, nil
+}
+
+// SetTermSize stores the terminal dimensions for boundary detection during drag.
+// Called by App on each render cycle.
+func (p *Popup) SetTermSize(w, h int) {
+	p.termWidth = w
+	p.termHeight = h
 }
 
 func isPopupPlainText(value string) bool {
@@ -774,7 +787,7 @@ func (p *Popup) handleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 		}
 		p.offsetX = p.dragStartOffX + mouse.X - p.dragMouseX
 		p.offsetY = p.dragStartOffY + mouse.Y - p.dragMouseY
-		return true, nil
+		return true, p.pointerCmd(p.desiredDragPointer())
 	}
 	if p.scrollDragging {
 		if isRelease {
@@ -1004,6 +1017,62 @@ func (p *Popup) desiredPointer(mouse tea.Mouse) string {
 		return "text"
 	}
 	return ""
+}
+
+// desiredDragPointer returns the cursor shape during title-bar drag, indicating
+// which directions remain movable when the popup reaches terminal boundaries.
+// Uses single-direction resize cursors so the cursor arrow points toward the
+// direction(s) the user can still drag.
+func (p *Popup) desiredDragPointer() string {
+	if p.termWidth <= 0 || p.termHeight <= 0 || !p.boundsSet {
+		return "grabbing"
+	}
+	ox, oy := p.anchorOrigin(p.termWidth, p.termHeight, p.bounds.w, p.bounds.h)
+	x := ox + p.offsetX
+	y := oy + p.offsetY
+
+	atLeft := x <= 0
+	atRight := x+p.bounds.w >= p.termWidth
+	atTop := y <= 0
+	atBottom := y+p.bounds.h >= p.termHeight
+
+	// No boundaries hit — free movement in all directions.
+	if !atLeft && !atRight && !atTop && !atBottom {
+		return "grabbing"
+	}
+
+	switch {
+	// Single direction blocked — cursor points to the available side.
+	case atLeft && !atRight && !atTop && !atBottom:
+		return "e-resize" // only right
+	case atRight && !atLeft && !atTop && !atBottom:
+		return "w-resize" // only left
+	case atTop && !atBottom && !atLeft && !atRight:
+		return "s-resize" // only down
+	case atBottom && !atTop && !atLeft && !atRight:
+		return "n-resize" // only up
+
+	// Corners — two edges blocked, cursor shows diagonal toward the free quadrant.
+	case atTop && atLeft && !atRight && !atBottom:
+		return "se-resize" // ↘ right + down
+	case atTop && atRight && !atLeft && !atBottom:
+		return "sw-resize" // ↙ left + down
+	case atBottom && atLeft && !atRight && !atTop:
+		return "ne-resize" // ↗ right + up
+	case atBottom && atRight && !atLeft && !atTop:
+		return "nw-resize" // ↖ left + up
+
+	// Horizontal fully blocked — only vertical movement possible.
+	case atLeft && atRight && !atTop && !atBottom:
+		return "ns-resize"
+	// Vertical fully blocked — only horizontal movement possible.
+	case atTop && atBottom && !atLeft && !atRight:
+		return "ew-resize"
+
+	// Three or four directions blocked (popup pinned or nearly so).
+	default:
+		return "not-allowed"
+	}
 }
 
 // resizeHandleAt reports which resize handle (corner or edge) the mouse is over.

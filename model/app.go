@@ -551,6 +551,7 @@ func (a *App) compositeModals(baseContent string) string {
 			popupW := layout.Width(rendered.content)
 			x, y := m.computePosition(w, h, popupW, popupH)
 			m.setBounds(x, y, popupW, popupH, rendered.actionBounds)
+			m.SetTermSize(w, h)
 			layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
 		case *ContextMenu:
 			rendered := m.renderModal(ss)
