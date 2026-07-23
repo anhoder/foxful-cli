@@ -26,7 +26,6 @@ func NewMainMenu() *MainMenu {
 		{Title: "Main Menu 3"},
 		{Title: "Main Menu 4"},
 		{Title: "Main Menu 5"},
-		{Title: ""},
 		{Title: "Press 'm' for Markdown preview"},
 		{Title: "Press 'r' for Resizable Markdown demo"},
 	}
@@ -224,6 +223,7 @@ func (c *MarkdownController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, m
 			MarkdownEmoji:   true,
 			MaxWidth:        popupWidth,
 			MaxHeight:       maxH,
+			DisableResize:   true,
 			Actions: []model.PopupAction{
 				{ID: "ok", Label: "OK"},
 			},

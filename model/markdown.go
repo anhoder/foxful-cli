@@ -154,6 +154,7 @@ type MarkdownPopupSpec struct {
 	OffsetX         int
 	OffsetY         int
 	OnResult        func(PopupResult)
+	DisableResize   bool // when true, disable mouse-driven resize for this popup
 }
 
 // NewMarkdownPopup creates a popup that displays rendered Markdown content.
@@ -202,14 +203,15 @@ func NewMarkdownPopup(spec MarkdownPopupSpec) (*Popup, error) {
 
 	// Create popup with rendered markdown content
 	return NewPopup(PopupSpec{
-		Title:     spec.Title,
-		Content:   rendered,
-		Actions:   actions,
-		MaxWidth:  spec.MaxWidth,
-		MaxHeight: spec.MaxHeight,
-		Anchor:    spec.Anchor,
-		OffsetX:   spec.OffsetX,
-		OffsetY:   spec.OffsetY,
-		OnResult:  spec.OnResult,
+		Title:         spec.Title,
+		Content:       rendered,
+		Actions:       actions,
+		MaxWidth:      spec.MaxWidth,
+		MaxHeight:     spec.MaxHeight,
+		Anchor:        spec.Anchor,
+		OffsetX:       spec.OffsetX,
+		OffsetY:       spec.OffsetY,
+		OnResult:      spec.OnResult,
+		DisableResize: spec.DisableResize,
 	})
 }

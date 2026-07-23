@@ -27,7 +27,6 @@ func (m *MainMenu) MenuViews() []model.MenuItem {
 		{Title: "3 — No buttons"},
 		{Title: "4 — Rich content with emoji"},
 		{Title: "5 — Help document"},
-		{Title: ""},
 		{Title: "q — Quit"},
 	}
 }
