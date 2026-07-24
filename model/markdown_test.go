@@ -40,7 +40,7 @@ func TestMarkdownRenderToString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			md := NewMarkdown(tt.content, WithMarkdownStyle("dark"))
+			md := NewMarkdown(tt.content, WithMarkdownDarkStyle("dark"))
 			rendered, err := md.RenderToString(tt.width)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("RenderToString() error = %v, wantErr %v", err, tt.wantErr)
@@ -59,15 +59,15 @@ func TestMarkdownRenderToString(t *testing.T) {
 func TestMarkdownRenderToStringWithEmoji(t *testing.T) {
 	content := "# Test :rocket: emoji"
 	md := NewMarkdown(content,
-		WithMarkdownStyle("dark"),
+		WithMarkdownDarkStyle("dark"),
 		WithMarkdownEmoji(true),
 	)
-	
+
 	rendered, err := md.RenderToString(80)
 	if err != nil {
 		t.Fatalf("RenderToString() error = %v", err)
 	}
-	
+
 	if rendered == "" {
 		t.Error("Expected non-empty rendered output")
 	}
@@ -79,20 +79,20 @@ func TestNewMarkdownPopup_DefaultCloseButton(t *testing.T) {
 		MarkdownContent: "# Hello",
 		Actions:         nil, // nil should add default Close button
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if popup == nil {
 		t.Fatal("Expected non-nil popup")
 	}
-	
+
 	// Check that a Close button was added
 	if len(popup.actions) != 1 {
 		t.Errorf("Expected 1 action, got %d", len(popup.actions))
 	}
-	
+
 	if len(popup.actions) > 0 {
 		if popup.actions[0].ID != "close" {
 			t.Errorf("Expected action ID 'close', got %q", popup.actions[0].ID)
@@ -115,15 +115,15 @@ func TestNewMarkdownPopup_CustomButtons(t *testing.T) {
 			{ID: "no", Label: "No", IsCancel: true},
 		},
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if len(popup.actions) != 2 {
 		t.Errorf("Expected 2 actions, got %d", len(popup.actions))
 	}
-	
+
 	if len(popup.actions) >= 2 {
 		if popup.actions[0].ID != "yes" {
 			t.Errorf("Expected first action ID 'yes', got %q", popup.actions[0].ID)
@@ -140,11 +140,11 @@ func TestNewMarkdownPopup_NoButtons(t *testing.T) {
 		MarkdownContent: "Read only",
 		Actions:         []PopupAction{}, // Empty slice = no buttons
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if len(popup.actions) != 0 {
 		t.Errorf("Expected 0 actions, got %d", len(popup.actions))
 	}
@@ -157,16 +157,16 @@ func TestNewMarkdownPopup_RendersMarkdown(t *testing.T) {
 		MarkdownContent: content,
 		MaxWidth:        80,
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	// Check that content was rendered (not raw markdown)
 	if popup.content == content {
 		t.Error("Expected rendered content, got raw markdown")
 	}
-	
+
 	// Check that content is not empty
 	if strings.TrimSpace(popup.content) == "" {
 		t.Error("Expected non-empty rendered content")
@@ -180,11 +180,11 @@ func TestNewMarkdownPopup_MaxWidthAccounting(t *testing.T) {
 		MarkdownContent: "Some content",
 		MaxWidth:        60,
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if popup.maxWidth != 60 {
 		t.Errorf("Expected maxWidth to be 60, got %d", popup.maxWidth)
 	}
@@ -196,11 +196,11 @@ func TestNewMarkdownPopup_WithEmoji(t *testing.T) {
 		MarkdownContent: ":rocket: Test",
 		MarkdownEmoji:   true,
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if popup == nil {
 		t.Fatal("Expected non-nil popup")
 	}
@@ -211,11 +211,11 @@ func TestNewMarkdownPopup_EmptyContent(t *testing.T) {
 		Title:           "Empty",
 		MarkdownContent: "",
 	})
-	
+
 	if err != nil {
 		t.Fatalf("NewMarkdownPopup() error = %v", err)
 	}
-	
+
 	if popup == nil {
 		t.Fatal("Expected non-nil popup")
 	}

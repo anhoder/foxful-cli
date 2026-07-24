@@ -413,6 +413,75 @@ func TestPopupEscapeClearsSelectionBeforeDismiss(t *testing.T) {
 	}
 }
 
+func TestPopupCustomCloseKeyDismisses(t *testing.T) {
+	popup, err := NewPopup(PopupSpec{CloseKeys: []string{"q"}})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+
+	// Esc is not a configured close key, so it must not dismiss.
+	popup.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if popup.dismissed() {
+		t.Fatal("esc dismissed popup that only closes on q")
+	}
+
+	popup.update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+	result := popup.consumeResult()
+	if result == nil {
+		t.Fatal("q did not dismiss popup")
+	}
+	if result.Cause != PopupDismissKey || result.Key != "q" {
+		t.Fatalf("q result = %+v, want key cause with key %q", *result, "q")
+	}
+}
+
+func TestPopupEmptyCloseKeysDisablesKeyDismiss(t *testing.T) {
+	popup, err := NewPopup(PopupSpec{CloseKeys: []string{}})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+
+	popup.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if popup.dismissed() {
+		t.Fatal("esc dismissed popup with key dismissal disabled")
+	}
+}
+
+func TestNewPopupRejectsEmptyCloseKey(t *testing.T) {
+	if _, err := NewPopup(PopupSpec{CloseKeys: []string{""}}); err == nil {
+		t.Fatal("NewPopup() accepted empty close key")
+	}
+}
+
+func TestPopupDisableOutsideClickKeepsOpen(t *testing.T) {
+	popup, err := NewPopup(PopupSpec{DisableOutsideClick: true})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+
+	if popup.dismissOutside() {
+		t.Fatal("dismissOutside() dismissed a popup with DisableOutsideClick")
+	}
+	if popup.dismissed() {
+		t.Fatal("popup dismissed despite DisableOutsideClick")
+	}
+}
+
+func TestPopupOutsideClickDismissesByDefault(t *testing.T) {
+	popup, err := NewPopup(PopupSpec{})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+
+	if !popup.dismissOutside() {
+		t.Fatal("dismissOutside() did not dismiss default popup")
+	}
+	result := popup.consumeResult()
+	if result == nil || result.Cause != PopupDismissOutsideClick {
+		t.Fatalf("outside-click result = %+v, want outside-click cause", result)
+	}
+}
+
 func samePopupColor(got, want color.Color) bool {
 	if got == nil || want == nil {
 		return got == nil && want == nil

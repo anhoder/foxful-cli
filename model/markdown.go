@@ -5,14 +5,22 @@ import (
 	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/anhoder/foxful-cli/style"
 )
 
 // MarkdownOption is a functional option for MarkdownComponent.
 type MarkdownOption func(*MarkdownComponent)
 
-// WithMarkdownStyle sets the glamour rendering style (e.g., "dark", "light", "dracula").
-func WithMarkdownStyle(style string) MarkdownOption {
-	return func(m *MarkdownComponent) { m.style = style }
+// WithMarkdownDarkStyle sets the glamour style used when the terminal has a dark
+// background. Empty defaults to "dark".
+func WithMarkdownDarkStyle(style string) MarkdownOption {
+	return func(m *MarkdownComponent) { m.darkStyle = style }
+}
+
+// WithMarkdownLightStyle sets the glamour style used when the terminal has a light
+// background. Empty defaults to "light".
+func WithMarkdownLightStyle(style string) MarkdownOption {
+	return func(m *MarkdownComponent) { m.lightStyle = style }
 }
 
 // WithMarkdownEmoji enables emoji rendering.
@@ -27,24 +35,42 @@ func WithMarkdownWordWrap(width int) MarkdownOption {
 
 // MarkdownComponent renders markdown content in the terminal using Glamour v2.
 type MarkdownComponent struct {
-	content   string
-	style     string // default "dark"
-	emoji     bool
-	wrapWidth int  // 0 = auto (use window width), >0 = fixed
-	renderer  *glamour.TermRenderer
-	lastWidth int // last window width used to build renderer
+	content    string
+	darkStyle  string // style for dark terminal; empty = "dark"
+	lightStyle string // style for light terminal; empty = "light"
+	emoji      bool
+	wrapWidth  int // 0 = auto (use window width), >0 = fixed
+	renderer   *glamour.TermRenderer
+	lastWidth  int // last window width used to build renderer
 }
 
 // NewMarkdown creates a new MarkdownComponent with the given content and options.
+// The style is auto-detected based on the terminal background (style.HasDarkBackground):
+// the dark style (default "dark") on dark terminals, the light style (default "light") on light.
 func NewMarkdown(content string, opts ...MarkdownOption) *MarkdownComponent {
 	m := &MarkdownComponent{
 		content: content,
-		style:   "dark",
 	}
 	for _, opt := range opts {
 		opt(m)
 	}
 	return m
+}
+
+// resolveStyle returns the effective glamour style name based on terminal background.
+// Auto-detects via style.HasDarkBackground(): uses m.darkStyle / m.lightStyle,
+// falling back to built-in defaults "dark" / "light".
+func (m *MarkdownComponent) resolveStyle() string {
+	if style.HasDarkBackground() {
+		if m.darkStyle != "" {
+			return m.darkStyle
+		}
+		return "dark"
+	}
+	if m.lightStyle != "" {
+		return m.lightStyle
+	}
+	return "light"
 }
 
 // SetContent updates the markdown content to render.
@@ -56,6 +82,13 @@ func (m *MarkdownComponent) SetContent(content string) {
 // Content returns the current markdown content.
 func (m *MarkdownComponent) Content() string {
 	return m.content
+}
+
+// ResetRenderer invalidates the cached renderer, forcing a rebuild on the next
+// View() or RenderToString() call. Use this when the terminal background changes
+// (light/dark mode switch) to pick up the new auto-detected style.
+func (m *MarkdownComponent) ResetRenderer() {
+	m.renderer = nil
 }
 
 // RenderToString renders the markdown content to a string with the specified width.
@@ -76,7 +109,7 @@ func (m *MarkdownComponent) RenderToString(width int) (string, error) {
 
 	// Build a fresh renderer for the specified width
 	var opts []glamour.TermRendererOption
-	opts = append(opts, glamour.WithStylePath(m.style))
+	opts = append(opts, glamour.WithStylePath(m.resolveStyle()))
 	opts = append(opts, glamour.WithWordWrap(renderWidth))
 	if m.emoji {
 		opts = append(opts, glamour.WithEmoji())
@@ -117,7 +150,7 @@ func (m *MarkdownComponent) View(a *App, main *Main) (string, int) {
 	// Rebuild renderer when width changes or on first use
 	if m.renderer == nil || (m.wrapWidth == 0 && w != m.lastWidth) {
 		var opts []glamour.TermRendererOption
-		opts = append(opts, glamour.WithStylePath(m.style))
+		opts = append(opts, glamour.WithStylePath(m.resolveStyle()))
 		opts = append(opts, glamour.WithWordWrap(renderWidth))
 		if m.emoji {
 			opts = append(opts, glamour.WithEmoji())
@@ -141,25 +174,42 @@ func (m *MarkdownComponent) View(a *App, main *Main) (string, int) {
 	return out, lipgloss.Height(out)
 }
 
+// markdownPopupMeta stores the original markdown source and configuration
+// so the popup can re-render its content when the terminal background changes.
+type markdownPopupMeta struct {
+	content    string
+	darkStyle  string // style for dark mode
+	lightStyle string // style for light mode
+	emoji      bool
+	wrapWidth  int
+}
+
 // MarkdownPopupSpec defines a popup that displays Markdown content.
 type MarkdownPopupSpec struct {
-	Title           string
-	MarkdownContent string
-	Actions         []PopupAction // nil = default Close button, empty slice = no buttons
-	MarkdownStyle   string        // default "dark"
-	MarkdownEmoji   bool          // enable emoji rendering
-	MaxWidth        int           // whole popup width, including border and padding; 0 = unlimited
-	MaxHeight       int           // whole popup height, including border and padding; 0 = unlimited
-	Anchor          PopupAnchor
-	OffsetX         int
-	OffsetY         int
-	OnResult        func(PopupResult)
-	DisableResize   bool // when true, disable mouse-driven resize for this popup
+	Title               string
+	MarkdownContent     string
+	Actions             []PopupAction // nil = default Close button, empty slice = no buttons
+	MarkdownDarkStyle   string        // Glamour style when terminal is dark. Empty = "dark" (default).
+	MarkdownLightStyle  string        // Glamour style when terminal is light. Empty = "light" (default).
+	MarkdownEmoji       bool          // enable emoji rendering
+	MaxWidth            int           // whole popup width, including border and padding; 0 = unlimited
+	MaxHeight           int           // whole popup height, including border and padding; 0 = unlimited
+	Anchor              PopupAnchor
+	OffsetX             int
+	OffsetY             int
+	OnResult            func(PopupResult)
+	DisableResize       bool     // when true, disable mouse-driven resize for this popup
+	CloseKeys           []string // keys that dismiss the popup; nil = ["esc"]
+	DisableOutsideClick bool     // when true, clicking outside doesn't dismiss
 }
 
 // NewMarkdownPopup creates a popup that displays rendered Markdown content.
 // If spec.Actions is nil, a default "Close" button is added.
 // If spec.Actions is an empty slice, no buttons are added.
+//
+// The glamour style is auto-detected from the terminal background:
+// spec.MarkdownDarkStyle (default "dark") on dark terminals,
+// spec.MarkdownLightStyle (default "light") on light terminals.
 func NewMarkdownPopup(spec MarkdownPopupSpec) (*Popup, error) {
 	// Determine render width from MaxWidth
 	renderWidth := spec.MaxWidth
@@ -174,15 +224,11 @@ func NewMarkdownPopup(spec MarkdownPopupSpec) (*Popup, error) {
 		renderWidth = 80
 	}
 
-	// Create markdown component with options
-	style := spec.MarkdownStyle
-	if style == "" {
-		style = "dark"
-	}
-
+	// Create markdown component with options.
 	md := NewMarkdown(
 		spec.MarkdownContent,
-		WithMarkdownStyle(style),
+		WithMarkdownDarkStyle(spec.MarkdownDarkStyle),
+		WithMarkdownLightStyle(spec.MarkdownLightStyle),
 		WithMarkdownEmoji(spec.MarkdownEmoji),
 		WithMarkdownWordWrap(renderWidth),
 	)
@@ -202,16 +248,32 @@ func NewMarkdownPopup(spec MarkdownPopupSpec) (*Popup, error) {
 	}
 
 	// Create popup with rendered markdown content
-	return NewPopup(PopupSpec{
-		Title:         spec.Title,
-		Content:       rendered,
-		Actions:       actions,
-		MaxWidth:      spec.MaxWidth,
-		MaxHeight:     spec.MaxHeight,
-		Anchor:        spec.Anchor,
-		OffsetX:       spec.OffsetX,
-		OffsetY:       spec.OffsetY,
-		OnResult:      spec.OnResult,
-		DisableResize: spec.DisableResize,
+	popup, err := NewPopup(PopupSpec{
+		Title:               spec.Title,
+		Content:             rendered,
+		Actions:             actions,
+		MaxWidth:            spec.MaxWidth,
+		MaxHeight:           spec.MaxHeight,
+		Anchor:              spec.Anchor,
+		OffsetX:             spec.OffsetX,
+		OffsetY:             spec.OffsetY,
+		OnResult:            spec.OnResult,
+		DisableResize:       spec.DisableResize,
+		CloseKeys:           spec.CloseKeys,
+		DisableOutsideClick: spec.DisableOutsideClick,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Store markdown metadata for theme-switch re-rendering
+	popup.markdownMeta = &markdownPopupMeta{
+		content:    spec.MarkdownContent,
+		darkStyle:  spec.MarkdownDarkStyle,
+		lightStyle: spec.MarkdownLightStyle,
+		emoji:      spec.MarkdownEmoji,
+		wrapWidth:  renderWidth,
+	}
+
+	return popup, nil
 }

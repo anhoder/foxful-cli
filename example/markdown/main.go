@@ -202,28 +202,32 @@ func (c *MarkdownController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, m
 	var err error
 
 	if msg.String() == "r" {
-		// Demo: Resizable Markdown popup with instructions
+		// Demo: Resizable Markdown popup with auto-detected style
 		popup, err = model.NewMarkdownPopup(model.MarkdownPopupSpec{
-			Title:           "Resizable Markdown Preview",
-			MarkdownContent: markdownContent + resizeInstructions,
-			MarkdownStyle:   "dark",
-			MarkdownEmoji:   true,
-			MaxWidth:        popupWidth,
-			MaxHeight:       maxH,
+			Title:              "Resizable Markdown Preview",
+			MarkdownContent:    markdownContent + resizeInstructions,
+			MarkdownDarkStyle:  "dracula",
+			MarkdownLightStyle: "light",
+			MarkdownEmoji:      true,
+			MaxWidth:           popupWidth,
+			MaxHeight:          maxH,
+			CloseKeys:          []string{"esc", "q"},
 			Actions: []model.PopupAction{
 				{ID: "ok", Label: "OK"},
 			},
 		})
 	} else {
-		// Original: Standard Markdown popup
+		// Original: Standard Markdown popup with auto-detected style
 		popup, err = model.NewMarkdownPopup(model.MarkdownPopupSpec{
-			Title:           "Markdown Preview",
-			MarkdownContent: markdownContent,
-			MarkdownStyle:   "dark",
-			MarkdownEmoji:   true,
-			MaxWidth:        popupWidth,
-			MaxHeight:       maxH,
-			DisableResize:   true,
+			Title:              "Markdown Preview",
+			MarkdownContent:    markdownContent,
+			MarkdownDarkStyle:  "dracula",
+			MarkdownLightStyle: "light",
+			MarkdownEmoji:      true,
+			MaxWidth:           popupWidth,
+			MaxHeight:          maxH,
+			DisableResize:      true,
+			CloseKeys:          []string{"esc", "q"},
 			Actions: []model.PopupAction{
 				{ID: "ok", Label: "OK"},
 			},

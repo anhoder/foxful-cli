@@ -92,7 +92,6 @@ type Menu interface {
 	// ContextMenuAction is called when the user selects a context menu item.
 	// Similar to Action, it can return a Page and/or Cmd to perform navigation or side effects.
 	ContextMenuAction(app *App, index int, item ContextMenuItem) (Page, tea.Cmd)
-
 }
 
 type LocalSearchMenu interface {
@@ -110,6 +109,14 @@ func (e *DefaultMenu) RealDataIndex(index int) int {
 	return index
 }
 
+// GetMenuKey returns a stable identifier for the menu, derived from its
+// concrete type. Override this to provide an explicit, stable key when your
+// app persists or routes by menu key.
+//
+// Caveat: because Go method embedding does not give the embedded DefaultMenu
+// access to the outer concrete type, this default returns the same value
+// ("*model.DefaultMenu") for every menu that embeds DefaultMenu. Any menu
+// that requires a unique key must override this method.
 func (e *DefaultMenu) GetMenuKey() string {
 	panic("implement me")
 }

@@ -80,6 +80,22 @@ type Main struct {
 	// element. When true, the terminal mouse pointer is set to "pointer" (hand
 	// cursor) via OSC 22. When false, it's reset to "default".
 	hoverPointerActive bool
+
+	// Multi-tab navigation (when Options.EnableTabs is true)
+	tabs      *Tabs      // nil when EnableTabs is false
+	activeTab int        // current tab index (0-based)
+	tabStates []tabState // per-tab isolated state (parallel to Options.TabConfigs)
+}
+
+// tabState holds the per-tab navigation state that is saved/restored on tab switch.
+// This allows each tab to maintain its own menu hierarchy, scroll position, and submenu stack.
+type tabState struct {
+	menu          Menu
+	menuTitle     *MenuItem
+	menuList      []MenuItem
+	selectedIndex int
+	menuCurPage   int
+	menuStack     *util.Stack
 }
 
 type tickMainMsg struct{}
@@ -121,7 +137,44 @@ func NewMain(app *App, options *Options) (m *Main) {
 		hoveredBackButton:    false,
 		hoverPointerActive:   false,
 	}
-	m.menuList = m.menu.MenuViews()
+
+	// Initialize multi-tab navigation if enabled
+	if options.EnableTabs && len(options.TabConfigs) > 0 {
+		// Create Tabs widget with titles extracted from TabConfigs
+		titles := make([]string, len(options.TabConfigs))
+		for i, cfg := range options.TabConfigs {
+			titles[i] = cfg.Title
+		}
+		m.tabs = NewTabs(titles)
+		m.tabs.SetBorder(true)
+		m.tabs.Focus()
+
+		// Initialize per-tab state snapshots
+		m.tabStates = make([]tabState, len(options.TabConfigs))
+		for i, cfg := range options.TabConfigs {
+			m.tabStates[i] = tabState{
+				menu:          cfg.Menu,
+				menuTitle:     cfg.MenuTitle,
+				menuList:      cfg.Menu.MenuViews(),
+				selectedIndex: 0,
+				menuCurPage:   1,
+				menuStack:     &util.Stack{},
+			}
+		}
+
+		// Load initial tab (tab 0)
+		m.activeTab = 0
+		firstState := m.tabStates[0]
+		m.menu = firstState.menu
+		m.menuTitle = firstState.menuTitle
+		m.menuList = firstState.menuList
+		m.menuStack = firstState.menuStack
+		// selectedIndex, menuCurPage already default to 0/1
+	} else {
+		// Standard single-menu mode (EnableTabs=false or no TabConfigs)
+		m.menuList = m.menu.MenuViews()
+	}
+
 	m.searchInput.Placeholder = " " + SearchPlaceholder
 	m.searchInput.Prompt = util.GetFocusedPrompt()
 	s := textinput.DefaultStyles(true)
@@ -175,6 +228,10 @@ func (m *Main) computeTitleStartRow() int {
 }
 
 func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
+	// Deliver every message to registered components after primary handling.
+	// Components read from the original tea.Msg and mutate their own state.
+	defer m.updateComponents(msg, a)
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.keyMsgHandle(msg, a)
@@ -299,6 +356,18 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	return m, nil
 }
 
+// updateComponents dispatches a message to every registered component so they
+// can maintain their own internal state. Components render below the menu list
+// (e.g. spectrum, lyrics). Nil entries are skipped.
+func (m *Main) updateComponents(msg tea.Msg, a *App) {
+	for _, component := range m.components {
+		if component == nil {
+			continue
+		}
+		component.Update(msg, a)
+	}
+}
+
 func (m *Main) View(a *App) string {
 	w, h := a.WindowWidth(), a.WindowHeight()
 	if w <= 0 || h <= 0 {
@@ -312,7 +381,14 @@ func (m *Main) View(a *App) string {
 		sections = append(sections, m.TitleView(a))
 	}
 
-	// ── 2. Menu sections ──
+	// ── 2. Tab bar (if multi-tab mode enabled) ──
+	if m.options.EnableTabs && m.tabs != nil {
+		// Update tabs widget size to match window width
+		m.tabs.SetSize(w, 0) // height auto-calculated by tabs widget
+		sections = append(sections, m.tabs.View())
+	}
+
+	// ── 3. Menu sections ──
 	if !m.options.HideMenu {
 		titleStartRow := m.computeTitleStartRow()
 
@@ -326,6 +402,21 @@ func (m *Main) View(a *App) string {
 				tmp.Subtitle = m.loadingTips
 			}
 			mt = &tmp
+		}
+
+		// When tabs are enabled and in a submenu, show breadcrumb trail
+		if m.options.EnableTabs && m.menuStack.Len() > 0 {
+			mt = m.buildBreadcrumb()
+			// Preserve loading tips if present
+			if m.loadingTips != "" {
+				tmp := *mt
+				if tmp.Subtitle != "" {
+					tmp.Subtitle = tmp.Subtitle + " " + m.loadingTips
+				} else {
+					tmp.Subtitle = m.loadingTips
+				}
+				mt = &tmp
+			}
 		}
 
 		// Vertical gap to menu title row.
@@ -436,6 +527,184 @@ func (m *Main) SelectedIndex() int {
 
 func (m *Main) SetSelectedIndex(i int) {
 	m.selectedIndex = i
+}
+
+// switchTab switches to the specified tab index, saving current tab state and
+// restoring the target tab's state. Calls TabConfig.OnActivate hook if defined.
+func (m *Main) switchTab(newIndex int) {
+	if newIndex == m.activeTab || newIndex < 0 || newIndex >= len(m.tabStates) {
+		return
+	}
+
+	prevIndex := m.activeTab
+
+	// 1. Save current tab's state
+	m.tabStates[m.activeTab] = tabState{
+		menu:          m.menu,
+		menuTitle:     m.menuTitle,
+		menuList:      m.menuList,
+		selectedIndex: m.selectedIndex,
+		menuCurPage:   m.menuCurPage,
+		menuStack:     m.menuStack.DeepCopy(),
+	}
+
+	// 2. Call OnActivate hook (if defined) — can veto the switch
+	if m.options.TabConfigs[newIndex].OnActivate != nil {
+		if !m.options.TabConfigs[newIndex].OnActivate(m, prevIndex) {
+			return // Hook vetoed the switch
+		}
+	}
+
+	// 3. Restore new tab's state
+	m.activeTab = newIndex
+	state := m.tabStates[newIndex]
+	m.menu = state.menu
+	m.menuTitle = state.menuTitle
+	m.menuList = state.menuList
+	m.selectedIndex = state.selectedIndex
+	m.menuCurPage = state.menuCurPage
+	m.menuStack = state.menuStack
+
+	// 4. Update Tabs widget active index
+	m.tabs.SetActive(newIndex)
+
+	// 5. Clear transient state
+	m.inSearching = false
+	m.searchInput.Reset()
+	m.searchInput.Blur()
+	m.hoveredMenuItemIdx = -1
+	m.hoveredBreadcrumbIdx = -1
+}
+
+// buildBreadcrumb constructs a breadcrumb trail from the current tab title
+// and menu stack hierarchy. Used when EnableTabs=true to show navigation context.
+func (m *Main) buildBreadcrumb() *MenuItem {
+	if !m.options.EnableTabs || m.tabs == nil {
+		return m.menuTitle
+	}
+
+	var parts []string
+
+	// Start with active tab title
+	if m.activeTab >= 0 && m.activeTab < len(m.options.TabConfigs) {
+		parts = append(parts, m.options.TabConfigs[m.activeTab].Title)
+	}
+
+	// Add menu stack path (each menuStackItem's title)
+	if m.menuStack.Len() > 0 {
+		stackItems := m.menuStack.ToSlice()
+		for _, item := range stackItems {
+			if si, ok := item.(*menuStackItem); ok && si.menuTitle != nil {
+				parts = append(parts, si.menuTitle.Title)
+			}
+		}
+	}
+
+	// Add current menu title
+	if m.menuTitle != nil && m.menuTitle.Title != "" {
+		parts = append(parts, m.menuTitle.Title)
+	}
+
+	if len(parts) == 0 {
+		return &MenuItem{Title: ""}
+	}
+
+	// Join with " > " separator
+	breadcrumb := strings.Join(parts, " > ")
+
+	// Truncate if too long (optional: could implement smart truncation here)
+	return &MenuItem{Title: breadcrumb, Subtitle: ""}
+}
+
+// tabIndexAt returns the tab index at the given mouse coordinates, or -1 if not over any tab.
+// Calculates the horizontal layout of tabs (with borders and padding) and checks if the click
+// falls within a tab's rendered region.
+func (m *Main) tabIndexAt(x, y int, a *App) int {
+	if !m.options.EnableTabs || m.tabs == nil || len(m.tabStates) == 0 {
+		return -1
+	}
+
+	// Calculate tab bar starting row in the view
+	// Rendering order from View(): [Title bar (optional)] + [Tab bar] + [vertical gap] + [menu title] + ...
+	tabBarStartRow := 0
+	if m.options.WhetherDisplayTitle {
+		tabBarStartRow++ // Title bar takes 1 row
+	}
+
+	// Tab bar with borders occupies ~3 rows (top border + content + bottom border)
+	// Check if mouse Y is within tab bar region
+	tabBarHeight := 3 // conservative estimate for bordered tabs
+	if y < tabBarStartRow || y >= tabBarStartRow+tabBarHeight {
+		return -1
+	}
+
+	// Calculate horizontal position of each tab to determine which was clicked
+	// Match the rendering logic from tabs.go renderTabBar()
+	ss := style.CurrentStyleSet()
+
+	activeTabBorder := lipgloss.Border{
+		Top:         "─",
+		Bottom:      " ",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┘",
+		BottomRight: "└",
+	}
+
+	tabBorder := lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┴",
+		BottomRight: "┴",
+	}
+
+	borderColor := ss.SelectedItem.GetForeground()
+	if !m.tabs.Focused() {
+		borderColor = ss.Border.GetForeground()
+	}
+
+	tab := lipgloss.NewStyle().
+		Border(tabBorder, true).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+
+	activeTab := lipgloss.NewStyle().
+		Border(activeTabBorder, true).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+
+	// Calculate cumulative width for each tab to determine click boundaries
+	currentX := 0
+	for i := 0; i < len(m.options.TabConfigs); i++ {
+		title := m.options.TabConfigs[i].Title
+
+		var tabContent string
+		var renderedTab string
+		if i == m.activeTab {
+			tabContent = ss.SelectedItem.Render(title)
+			renderedTab = activeTab.Render(tabContent)
+		} else {
+			tabContent = ss.MenuItem.Render(title)
+			renderedTab = tab.Render(tabContent)
+		}
+
+		tabWidth := lipgloss.Width(renderedTab)
+
+		// Check if click falls within this tab's horizontal range
+		if x >= currentX && x < currentX+tabWidth {
+			return i
+		}
+
+		currentX += tabWidth
+	}
+
+	return -1
 }
 
 // TitleView renders the app name as a decorative bar with dashes on both sides.
@@ -995,6 +1264,33 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 		return m, tea.Batch(cmd)
 	}
 
+	// Tab switching (when tabs enabled and not in search mode)
+	if m.options.EnableTabs && m.tabs != nil && len(m.tabStates) > 0 {
+		key := msg.String()
+		switch key {
+		case "ctrl+tab":
+			m.switchTab((m.activeTab + 1) % len(m.tabStates))
+			return m, a.RerenderCmd(true)
+		case "ctrl+shift+tab":
+			newIndex := m.activeTab - 1
+			if newIndex < 0 {
+				newIndex = len(m.tabStates) - 1
+			}
+			m.switchTab(newIndex)
+			return m, a.RerenderCmd(true)
+		case "ctrl+right":
+			m.switchTab((m.activeTab + 1) % len(m.tabStates))
+			return m, a.RerenderCmd(true)
+		case "ctrl+left":
+			newIndex := m.activeTab - 1
+			if newIndex < 0 {
+				newIndex = len(m.tabStates) - 1
+			}
+			m.switchTab(newIndex)
+			return m, a.RerenderCmd(true)
+		}
+	}
+
 	var (
 		key             = msg.String()
 		newPage         Page
@@ -1137,6 +1433,17 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 
 	switch mouse.Button {
 	case tea.MouseLeft:
+		// Check tab bar click (when multi-tab mode enabled)
+		if m.options.EnableTabs && m.tabs != nil {
+			if tabIdx := m.tabIndexAt(mouse.X, mouse.Y, a); tabIdx >= 0 {
+				if tabIdx != m.activeTab {
+					m.switchTab(tabIdx)
+					return m, a.RerenderCmd(true)
+				}
+				return m, a.Tick(time.Nanosecond)
+			}
+		}
+
 		// Check back button click (navigate back to parent menu)
 		if m.isOverBackButton(mouse.X, mouse.Y, a) {
 			newPage := m.BackMenu()
@@ -1236,7 +1543,6 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 			return newPage, a.RerenderCmd(true)
 		}
 		return m, a.RerenderCmd(true)
-
 
 	case tea.MouseRight:
 		if !m.mouseInMenuArea(mouse.Y) {

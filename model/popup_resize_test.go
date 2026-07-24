@@ -130,10 +130,10 @@ func TestPopupResizeHandleDetection(t *testing.T) {
 	popup.setBounds(10, 5, 40, 20, rendered.actionBounds)
 
 	tests := []struct {
-		name   string
-		x      int
-		y      int
-		want   ResizeHandle
+		name string
+		x    int
+		y    int
+		want ResizeHandle
 	}{
 		{
 			name: "bottom_right_corner",
@@ -192,7 +192,7 @@ func TestPopupResizePointerShape(t *testing.T) {
 	cornerX := popup.bounds.x + popup.bounds.w - 1
 	cornerY := popup.bounds.y + popup.bounds.h - 1
 	mouse := tea.Mouse{X: cornerX, Y: cornerY}
-	
+
 	pointer := popup.desiredPointer(mouse)
 	if pointer != "nwse-resize" {
 		t.Errorf("Expected pointer = 'nwse-resize' at resize corner, got %q", pointer)
@@ -220,7 +220,7 @@ func TestPopupResizeIndicatorRendered(t *testing.T) {
 	styleSet := style.NewStyleSet(theme).Popup
 
 	rendered := popup.render(styleSet)
-	
+
 	// Check that rendered content is not empty
 	if rendered.content == "" {
 		t.Fatal("Expected non-empty rendered content")
@@ -233,18 +233,18 @@ func TestPopupResizeIndicatorRendered(t *testing.T) {
 	if len(screen.Lines) == 0 {
 		t.Fatal("Expected screen to have lines")
 	}
-	
+
 	lastLine := len(screen.Lines) - 1
 	if lastLine < 0 {
 		t.Fatal("Expected at least one line")
 	}
-	
+
 	// The resize indicator should be in the last cell
 	lastCol := len(screen.Lines[lastLine]) - 1
 	if lastCol < 0 {
 		t.Fatal("Expected last line to have cells")
 	}
-	
+
 	cell := screen.Lines[lastLine][lastCol]
 	// The indicator is "◢"
 	if cell.Content != "◢" {
@@ -255,9 +255,9 @@ func TestPopupResizeIndicatorRendered(t *testing.T) {
 
 func TestPopupResizeVisualWidthIncreases(t *testing.T) {
 	popup, err := NewPopup(PopupSpec{
-		Title:   "Short",
-		Content: "Hi",
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Short",
+		Content:   "Hi",
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  30,
 		MaxHeight: 10,
 	})
@@ -291,9 +291,9 @@ func TestPopupResizeVisualWidthIncreases(t *testing.T) {
 
 func TestPopupResizeVisualHeightIncreases(t *testing.T) {
 	popup, err := NewPopup(PopupSpec{
-		Title:   "Short",
-		Content: "One line",
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Short",
+		Content:   "One line",
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  40,
 		MaxHeight: 10,
 	})
@@ -327,9 +327,9 @@ func TestPopupResizeVisualHeightIncreases(t *testing.T) {
 
 func TestPopupResizeVisualShrinks(t *testing.T) {
 	popup, err := NewPopup(PopupSpec{
-		Title:   "Shrink",
-		Content: "This is some longer content that will wrap when the popup shrinks",
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Shrink",
+		Content:   "This is some longer content that will wrap when the popup shrinks",
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  60,
 		MaxHeight: 14,
 	})
@@ -498,10 +498,10 @@ func TestPopupDisableResizeNoResizeCursor(t *testing.T) {
 	bx, by, bw, bh := popup.bounds.x, popup.bounds.y, popup.bounds.w, popup.bounds.h
 
 	tests := []struct {
-		name     string
-		x        int
-		y        int
-		badPtr   string
+		name   string
+		x      int
+		y      int
+		badPtr string
 	}{
 		{"corner", bx + bw - 1, by + bh - 1, "nwse-resize"},
 		{"right_edge", bx + bw - 1, by + bh/2, "ew-resize"},
@@ -774,9 +774,9 @@ func TestPopupResizeBottomLeftCorner(t *testing.T) {
 func popupForResizeTest(t *testing.T, w, h int) *Popup {
 	t.Helper()
 	popup, err := NewPopup(PopupSpec{
-		Title:   "Resize",
-		Content: "Some content to test resize behavior",
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Resize",
+		Content:   "Some content to test resize behavior",
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  w,
 		MaxHeight: h,
 	})
@@ -799,9 +799,9 @@ func TestPopupScrollbarPinnedToRightEdge(t *testing.T) {
 	// When the popup is wider than the content, the scrollbar should stick
 	// to the right edge of the body area, not float mid-content.
 	popup, err := NewPopup(PopupSpec{
-		Title:   "Wide",
-		Content: strings.Repeat("short\n", 15), // 15 lines of "short" (5 chars)
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Wide",
+		Content:   strings.Repeat("short\n", 15), // 15 lines of "short" (5 chars)
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  50, // wide enough that content doesn't fill
 		MaxHeight: 8,  // only show ~5 lines → scrolling
 	})
@@ -838,9 +838,9 @@ func TestPopupScrollbarPinnedToRightEdge(t *testing.T) {
 func TestPopupScrollbarBackgroundMatchesSurface(t *testing.T) {
 	// Verify the scrollbar track and thumb use the popup surface background.
 	_, err := NewPopup(PopupSpec{
-		Title:   "Scroll",
-		Content: strings.Repeat("line\n", 20),
-		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+		Title:     "Scroll",
+		Content:   strings.Repeat("line\n", 20),
+		Actions:   []PopupAction{{ID: "ok", Label: "OK"}},
 		MaxWidth:  40,
 		MaxHeight: 8,
 	})

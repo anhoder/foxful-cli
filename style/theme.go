@@ -212,8 +212,8 @@ func orString(a, b string) string {
 // ---- terminal background detection (runtime-updatable) ----
 
 // detectedDarkBg caches whether the terminal has a dark background.
-// Defaults to true (dark) as a safe fallback. Updated on startup by
-// App.Run() via SetDarkBackground, and at runtime via BackgroundColorMsg.
+// Defaults to true (dark backgrounds are common in terminals).
+// Updated on startup by App.Run() via SetDarkBackground, and at runtime via BackgroundColorMsg.
 var detectedDarkBg = true
 
 // SetDarkBackground updates the cached terminal background detection result.
@@ -645,7 +645,7 @@ func NewStyleSet(theme Theme) StyleSet {
 	bgIsDark := false
 	if bg, ok := colorful.MakeColor(theme.Background); ok {
 		_, _, l := bg.Hsl()
-		bgIsDark = l <= 0.5
+		bgIsDark = l < 0.5
 	}
 
 	// ---- Base palette ----
@@ -975,6 +975,12 @@ func NewStyleSet(theme Theme) StyleSet {
 		for k, v := range theme.Custom {
 			base.Custom[k] = lipgloss.NewStyle().Foreground(v)
 		}
+	}
+
+	// In accessible mode, add color-independent emphasis (reverse/bold/underline)
+	// so selection and focus stay visible when the terminal cannot render color.
+	if AccessibleMode() {
+		base = applyAccessibleEmphasis(base)
 	}
 
 	return base

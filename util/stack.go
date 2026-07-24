@@ -62,3 +62,29 @@ func (s *Stack) ToSlice() []interface{} {
 	}
 	return items
 }
+
+// DeepCopy creates a deep copy of the stack, preserving order and content.
+// Each value is copied by value (interface{} reference is copied, not the
+// underlying data). If stack items require custom deep copy semantics, the
+// caller must handle that separately.
+func (s *Stack) DeepCopy() *Stack {
+	if s == nil {
+		return nil
+	}
+	newStack := &Stack{
+		len: s.len,
+	}
+	if s.tail == nil {
+		return newStack
+	}
+
+	// Collect all nodes from tail to head (reverse order)
+	items := s.ToSlice()
+
+	// Rebuild stack in original order
+	for _, item := range items {
+		newStack.Push(item)
+	}
+
+	return newStack
+}

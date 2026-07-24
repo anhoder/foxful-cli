@@ -8,6 +8,15 @@ import (
 	"github.com/anhoder/foxful-cli/util"
 )
 
+// TabConfig defines a single tab in multi-tab main menu mode.
+// Each tab has an isolated menu hierarchy, scroll position, and navigation stack.
+type TabConfig struct {
+	Title      string
+	Menu       Menu
+	MenuTitle  *MenuItem
+	OnActivate func(m *Main, prevTabIndex int) bool // Called when tab becomes active. Return false to veto the switch.
+}
+
 type Options struct {
 	StartupOptions
 	ProgressOptions
@@ -31,10 +40,20 @@ type Options struct {
 	InitPage        InitPage
 	MainMenuTitle   *MenuItem
 	Ticker          Ticker          // Ticker for render
-	MainMenu        Menu            // Entry menu of app
+	MainMenu        Menu            // Entry menu when EnableTabs is false. When EnableTabs is true, TabConfigs[0].Menu becomes the entry menu and this field is ignored.
 	LocalSearchMenu LocalSearchMenu // Local search result menu
 	Components      []Component     // Custom Extra components
 	StatusBar       StatusBar       // Custom status bar, nil = no status bar
+
+	// EnableTabs activates multi-tab navigation in the Main page. When true,
+	// TabConfigs defines the available tabs; when false (default), MainMenu and
+	// MainMenuTitle are used. Tab switching keys: Ctrl+Tab, Ctrl+Shift+Tab,
+	// Ctrl+Left, Ctrl+Right. Each tab maintains isolated menu stack and scroll position.
+	EnableTabs bool
+	// TabConfigs defines the tabs when EnableTabs is true. Each tab has an
+	// isolated menu stack and scroll position. Tabs are static (no runtime
+	// add/remove). Keep count ≤8 for usability.
+	TabConfigs []TabConfig
 
 	GlobalKeyHandlers map[string]GlobalKeyHandler
 	KBControllers     []KeyboardController

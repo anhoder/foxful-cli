@@ -52,6 +52,9 @@ const (
 	PopupDismissAction PopupDismissCause = iota
 	PopupDismissEscape
 	PopupDismissOutsideClick
+	// PopupDismissKey indicates dismissal by a configured close key other than
+	// Escape (see PopupSpec.CloseKeys). PopupResult.Key holds the key name.
+	PopupDismissKey
 )
 
 // PopupResult is passed to PopupSpec.OnResult after the popup is dismissed.
@@ -59,6 +62,9 @@ const (
 type PopupResult struct {
 	ActionID string
 	Cause    PopupDismissCause
+	// Key is the key name (tea.Key.String, e.g. "esc", "q") that triggered a
+	// key-based dismissal. Empty for action, mouse, or outside-click dismissal.
+	Key string
 }
 
 // PopupAnchor controls where on the screen a popup appears.
@@ -93,6 +99,17 @@ type PopupSpec struct {
 	// drag, and resize cursor hints). When true, the popup renders without the
 	// ◢ indicator and ignores resize-corner mouse events. Default false.
 	DisableResize bool
+
+	// CloseKeys lists key names (as reported by tea.Key.String, e.g. "esc",
+	// "q", "ctrl+c") that dismiss the popup as a cancel. When nil, it defaults
+	// to {"esc"}. Pass a non-nil empty slice to disable key-based dismissal.
+	// If "esc" is included, the first Esc press clears an active text selection
+	// and the next dismisses.
+	CloseKeys []string
+
+	// DisableOutsideClick keeps the popup open when the user clicks outside it.
+	// Default false (an outside left-click dismisses the popup).
+	DisableOutsideClick bool
 }
 
 // Popup is an active modal dialog. Its configuration is immutable after
@@ -109,6 +126,16 @@ type Popup struct {
 	onResult  func(PopupResult)
 
 	disableResize bool // when true, hide indicator and ignore resize mouse events
+
+	// closeKeys is the set of key names that dismiss the popup as a cancel.
+	closeKeys map[string]struct{}
+	// disableOutsideClick keeps the popup open on outside clicks when true.
+	disableOutsideClick bool
+
+	// markdownMeta stores markdown rendering metadata for popups created via
+	// NewMarkdownPopup. When non-nil, the popup can re-render its content when
+	// the terminal background changes (light/dark mode switch).
+	markdownMeta *markdownPopupMeta
 
 	focusedAction int
 	hoveredAction int
@@ -128,22 +155,17 @@ type Popup struct {
 	scrollDragging bool
 
 	// Resize state: true while the user drags a resize handle.
-	resizing         bool
-	resizeStartW     int // popup width when resize began
-	resizeStartH     int // popup height when resize began
+	resizing          bool
+	resizeStartW      int // popup width when resize began
+	resizeStartH      int // popup height when resize began
 	resizeStartMouseX int
 	resizeStartMouseY int
-	resizeHandle     ResizeHandle
+	resizeHandle      ResizeHandle
 
-	// Text selection state, in full-content coordinates (line index into
-	// contentLines, display column). Anchor is where the drag began; cursor
-	// tracks the current mouse position.
-	selecting     bool
-	hasSelection  bool
-	selAnchorLine int
-	selAnchorCol  int
-	selCursorLine int
-	selCursorCol  int
+	// Text selection state (selecting/hasSelection/anchor+cursor coords and
+	// contentLines) is provided by the embedded textSelection; its fields and
+	// methods are promoted onto Popup.
+	textSelection
 
 	// pointerShape tracks the currently-set OSC 22 pointer shape ("" = default),
 	// so hover changes only emit an escape when the shape actually changes.
@@ -158,7 +180,7 @@ type Popup struct {
 	// Rendering geometry captured on each render(), popup-relative unless the
 	// name says otherwise. Used by handleMouse to hit-test the scrollbar and
 	// content region. scrollbarRelX is -1 when the content is not scrollable.
-	contentLines  []string
+	// contentLines is promoted from the embedded textSelection.
 	bodyRelX      int
 	bodyRelY      int
 	visibleRows   int
@@ -212,18 +234,32 @@ func NewPopup(spec PopupSpec) (*Popup, error) {
 		return nil, fmt.Errorf("popup may have at most one cancel action")
 	}
 
+	closeKeys := spec.CloseKeys
+	if closeKeys == nil {
+		closeKeys = []string{"esc"}
+	}
+	closeKeySet := make(map[string]struct{}, len(closeKeys))
+	for _, key := range closeKeys {
+		if key == "" {
+			return nil, fmt.Errorf("popup close key must not be empty")
+		}
+		closeKeySet[key] = struct{}{}
+	}
+
 	return &Popup{
-		title:         spec.Title,
-		content:       spec.Content,
-		actions:       actions,
-		maxWidth:      spec.MaxWidth,
-		maxHeight:     spec.MaxHeight,
-		anchor:        spec.Anchor,
-		offsetX:       spec.OffsetX,
-		offsetY:       spec.OffsetY,
-		onResult:      spec.OnResult,
-		disableResize: spec.DisableResize,
-		hoveredAction: -1,
+		title:               spec.Title,
+		content:             spec.Content,
+		actions:             actions,
+		maxWidth:            spec.MaxWidth,
+		maxHeight:           spec.MaxHeight,
+		anchor:              spec.Anchor,
+		offsetX:             spec.OffsetX,
+		offsetY:             spec.OffsetY,
+		onResult:            spec.OnResult,
+		disableResize:       spec.DisableResize,
+		closeKeys:           closeKeySet,
+		disableOutsideClick: spec.DisableOutsideClick,
+		hoveredAction:       -1,
 	}, nil
 }
 
@@ -278,13 +314,23 @@ func (p *Popup) update(msg tea.Msg) {
 		}
 	}
 
-	switch keyMsg.String() {
-	case "esc":
-		if p.hasSelection {
+	key := keyMsg.String()
+	// Configured close keys dismiss the popup as a cancel. Esc additionally
+	// clears an active text selection first (one press to clear, next to close).
+	if _, isClose := p.closeKeys[key]; isClose {
+		if key == "esc" && p.hasSelection {
 			p.clearSelection()
 			return
 		}
-		p.dismissCancel(PopupDismissEscape)
+		cause := PopupDismissKey
+		if key == "esc" {
+			cause = PopupDismissEscape
+		}
+		p.dismissCancelKey(cause, key)
+		return
+	}
+
+	switch key {
 	case "enter":
 		if len(p.actions) > 0 {
 			p.dismissAction(p.focusedAction, PopupDismissAction)
@@ -311,27 +357,70 @@ func (p *Popup) consumeResult() *PopupResult {
 }
 
 func (p *Popup) dismissAction(index int, cause PopupDismissCause) {
+	p.dismissActionKey(index, cause, "")
+}
+
+func (p *Popup) dismissActionKey(index int, cause PopupDismissCause, key string) {
 	if p.result != nil || index < 0 || index >= len(p.actions) {
 		return
 	}
-	p.result = &PopupResult{ActionID: p.actions[index].ID, Cause: cause}
+	p.result = &PopupResult{ActionID: p.actions[index].ID, Cause: cause, Key: key}
 }
 
 func (p *Popup) dismissCancel(cause PopupDismissCause) {
+	p.dismissCancelKey(cause, "")
+}
+
+func (p *Popup) dismissCancelKey(cause PopupDismissCause, key string) {
 	for i, action := range p.actions {
 		if action.IsCancel {
-			p.dismissAction(i, cause)
+			p.dismissActionKey(i, cause, key)
 			return
 		}
 	}
 	if p.result == nil {
-		p.result = &PopupResult{Cause: cause}
+		p.result = &PopupResult{Cause: cause, Key: key}
 	}
 }
 
-// dismissOutside implements Modal.dismissOutside for Popup.
-func (p *Popup) dismissOutside() {
+// dismissOutside implements Modal.dismissOutside for Popup. It returns false
+// without dismissing when outside-click dismissal is disabled.
+func (p *Popup) dismissOutside() bool {
+	if p.disableOutsideClick {
+		return false
+	}
 	p.dismissCancel(PopupDismissOutsideClick)
+	return true
+}
+
+// rerenderMarkdown re-renders the popup content if it was created via NewMarkdownPopup
+// and has markdown metadata. Used when the terminal background changes to pick up the
+// new auto-detected glamour style. Returns true if content was re-rendered.
+func (p *Popup) rerenderMarkdown() bool {
+	if p.markdownMeta == nil {
+		return false
+	}
+
+	md := NewMarkdown(
+		p.markdownMeta.content,
+		WithMarkdownDarkStyle(p.markdownMeta.darkStyle),
+		WithMarkdownLightStyle(p.markdownMeta.lightStyle),
+		WithMarkdownEmoji(p.markdownMeta.emoji),
+		WithMarkdownWordWrap(p.markdownMeta.wrapWidth),
+	)
+
+	rendered, err := md.RenderToString(p.markdownMeta.wrapWidth)
+	if err != nil {
+		return false
+	}
+
+	// Update content and reset scroll/selection state
+	p.content = rendered
+	p.contentLines = nil // force rebuild in renderContent
+	p.scrollOffset = 0
+	p.clearSelection()
+
+	return true
 }
 
 // complete implements Modal.complete for Popup.
@@ -371,14 +460,16 @@ func (p *Popup) render(styles style.PopupStyleSet) popupRender {
 
 	actions := p.renderActions(styles, maxContentWidth)
 
-	content := ""
-	contentLines := []string(nil)
-	if p.content != "" {
-		content = normalizePopupSurface(styles.Content.Render(p.content), styles.Surface)
-		contentLines = strings.Split(content, "\n")
+	// Build & cache normalized content lines. Rebuild only after invalidation
+	// (content or theme change); scrolling and resizing reuse the cache. This
+	// eliminates per-frame ANSI parsing (normalizePopupSurface) + string split,
+	// which caused scroll lag on long, ANSI-rich (markdown) content.
+	if p.contentLines == nil && p.content != "" {
+		normalized := normalizePopupSurface(styles.Content.Render(p.content), styles.Surface)
+		p.contentLines = strings.Split(normalized, "\n")
 	}
+	contentLines := p.contentLines
 	p.totalContentLines = len(contentLines)
-	p.contentLines = contentLines
 
 	// The action block, when present, is preceded by one blank spacer row.
 	actionsOverhead := actions.height
@@ -563,17 +654,17 @@ func addResizeIndicator(framed string, surface color.Color) string {
 	if len(screen.Lines) == 0 {
 		return framed
 	}
-	
+
 	lastLine := len(screen.Lines) - 1
 	if lastLine < 1 {
 		return framed
 	}
-	
+
 	// Place indicator on the second-to-last column of the second-to-last line
 	// This puts it inside the popup, next to the border
 	targetLine := lastLine - 1
 	targetCol := len(screen.Lines[targetLine]) - 2
-	
+
 	if targetCol >= 0 && targetLine >= 0 {
 		// Use ◢ (lower right triangle) as resize indicator
 		// Place it inside the popup with subtle styling
@@ -587,7 +678,7 @@ func addResizeIndicator(framed string, surface color.Color) string {
 		}
 		screen.Lines[targetLine].Set(targetCol, cell)
 	}
-	
+
 	return screen.Render()
 }
 
@@ -841,7 +932,7 @@ func (p *Popup) handleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 		case ResizeTop:
 			p.maxHeight = max(p.resizeStartH-deltaY, minH)
 		}
-		
+
 		return true, nil
 	}
 
@@ -895,7 +986,6 @@ func (p *Popup) handleLeftClick(mouse tea.Mouse, hoverCmd tea.Cmd) (bool, tea.Cm
 	relX := mouse.X - p.bounds.x
 	relY := mouse.Y - p.bounds.y
 
-
 	// Check for resize handle (highest priority for edge/corner)
 	if h := p.resizeHandleAt(mouse); h != ResizeNone {
 		p.clearSelection()
@@ -947,9 +1037,19 @@ func (p *Popup) handleLeftClick(mouse tea.Mouse, hoverCmd tea.Cmd) (bool, tea.Cm
 	return true, hoverCmd
 }
 
+// writeMousePointer synchronously emits the OSC 22 escape sequence that sets
+// the terminal mouse pointer shape. An empty shape resets to the terminal
+// default. This is the single low-level writer shared by the App methods and
+// the popup/notification pointer commands.
+func writeMousePointer(shape string) {
+	os.Stdout.WriteString("\x1b]22;" + shape + "\x1b\\")
+}
+
+// setMousePointer returns a tea.Cmd that emits the OSC 22 pointer-shape escape
+// sequence when executed by the bubbletea runtime.
 func setMousePointer(shape string) tea.Cmd {
 	return func() tea.Msg {
-		os.Stdout.WriteString("\x1b]22;" + shape + "\x1b\\")
+		writeMousePointer(shape)
 		return nil
 	}
 }
@@ -974,7 +1074,7 @@ func (p *Popup) desiredPointer(mouse tea.Mouse) string {
 	if !p.boundsSet || !p.bounds.contains(mouse.X, mouse.Y) {
 		return ""
 	}
-	
+
 	relX := mouse.X - p.bounds.x
 	relY := mouse.Y - p.bounds.y
 
@@ -1004,7 +1104,7 @@ func (p *Popup) desiredPointer(mouse tea.Mouse) string {
 	if p.actionAt(mouse.X, mouse.Y) >= 0 {
 		return "pointer"
 	}
-	
+
 	// Hover over entire scrollbar column (track + thumb) shows pointer
 	if p.scrollbarRelX >= 0 && relX == p.scrollbarRelX {
 		scrollbarTop := p.bodyRelY
@@ -1159,56 +1259,6 @@ func (p *Popup) updateSelectionCursor(mouse tea.Mouse) {
 	p.selCursorLine, p.selCursorCol = line, col
 }
 
-func (p *Popup) clearSelection() {
-	p.selecting = false
-	p.hasSelection = false
-	p.selAnchorLine, p.selAnchorCol = 0, 0
-	p.selCursorLine, p.selCursorCol = 0, 0
-}
-
-// finalizeSelection copies the selected text to the system clipboard (OSC 52).
-// A collapsed or whitespace-only selection is discarded.
-func (p *Popup) finalizeSelection() tea.Cmd {
-	text := p.selectionText()
-	if strings.TrimSpace(text) == "" {
-		p.clearSelection()
-		return nil
-	}
-	return tea.SetClipboard(text)
-}
-
-// normalizedSelection returns the selection bounds ordered so that
-// (startLine, startCol) precedes (endLine, endCol) in reading order.
-func (p *Popup) normalizedSelection() (int, int, int, int) {
-	if p.selAnchorLine < p.selCursorLine ||
-		(p.selAnchorLine == p.selCursorLine && p.selAnchorCol <= p.selCursorCol) {
-		return p.selAnchorLine, p.selAnchorCol, p.selCursorLine, p.selCursorCol
-	}
-	return p.selCursorLine, p.selCursorCol, p.selAnchorLine, p.selAnchorCol
-}
-
-// selectionRangeForLine returns the [left, right) display-column range selected
-// on full-content line i, and whether any range is selected there.
-func (p *Popup) selectionRangeForLine(i, width int) (int, int, bool) {
-	sL, sC, eL, eC := p.normalizedSelection()
-	if i < sL || i > eL {
-		return 0, 0, false
-	}
-	left, right := 0, width
-	if i == sL {
-		left = sC
-	}
-	if i == eL {
-		right = eC
-	}
-	left = clampInt(left, 0, width)
-	right = clampInt(right, 0, width)
-	if right <= left {
-		return 0, 0, false
-	}
-	return left, right, true
-}
-
 // applySelectionHighlight returns a copy of the visible lines with the selected
 // column ranges rendered in reverse video. visibleLines[k] maps to full-content
 // line scrollOffset+k.
@@ -1225,33 +1275,6 @@ func (p *Popup) applySelectionHighlight(visibleLines []string) []string {
 		out[k] = highlightColumns(line, left, right)
 	}
 	return out
-}
-
-// selectionText extracts the plain-text content of the current selection,
-// joining lines with newlines and trimming trailing padding on line-spanning rows.
-func (p *Popup) selectionText() string {
-	if !p.hasSelection {
-		return ""
-	}
-	sL, _, eL, _ := p.normalizedSelection()
-	sL = clampInt(sL, 0, max(len(p.contentLines)-1, 0))
-	eL = clampInt(eL, 0, max(len(p.contentLines)-1, 0))
-	parts := make([]string, 0, eL-sL+1)
-	for i := sL; i <= eL; i++ {
-		line := p.contentLines[i]
-		width := lipgloss.Width(line)
-		left, right, ok := p.selectionRangeForLine(i, width)
-		if !ok {
-			parts = append(parts, "")
-			continue
-		}
-		segment := ansi.Strip(ansi.Cut(line, left, right))
-		if right >= width {
-			segment = strings.TrimRight(segment, " ")
-		}
-		parts = append(parts, segment)
-	}
-	return strings.Join(parts, "\n")
 }
 
 // highlightColumns reverse-videos the display columns [left, right) of a single

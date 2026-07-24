@@ -1,12 +1,9 @@
 package model
 
 import (
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // NotificationLevel defines the semantic level of a notification.
@@ -53,19 +50,15 @@ type Notification struct {
 	bounds    notificationRect
 	boundsSet bool
 
-	// Selection state
-	selecting     bool
-	hasSelection  bool
-	selAnchorLine int
-	selAnchorCol  int
-	selCursorLine int
-	selCursorCol  int
+	// Selection state (selecting/hasSelection/anchor+cursor coords and
+	// contentLines) is provided by the embedded textSelection; its fields and
+	// methods are promoted onto Notification.
+	textSelection
 
 	// Cached rendering state for hit-testing (populated during render)
-	contentLines []string // wrapped content lines
-	contentWidth int      // width in columns
-	titleHeight int    // 1 if title present, 0 if no title
-	titleText   string // raw title text (icon + title) for clipboard copy
+	contentWidth int    // width in columns
+	titleHeight  int    // 1 if title present, 0 if no title
+	titleText    string // raw title text (icon + title) for clipboard copy
 }
 
 func (n *Notification) setBounds(x, y, w, h int) {
@@ -83,77 +76,6 @@ func (n *Notification) setContentGeometry(bodyLines []string, cw, th int, titleT
 	n.contentWidth = cw
 	n.titleHeight = th
 	n.titleText = titleText
-}
-
-func (n *Notification) clearSelection() {
-	n.selecting = false
-	n.hasSelection = false
-	n.selAnchorLine = 0
-	n.selAnchorCol = 0
-	n.selCursorLine = 0
-	n.selCursorCol = 0
-}
-
-func (n *Notification) normalizedSelection() (int, int, int, int) {
-	if n.selAnchorLine < n.selCursorLine ||
-		(n.selAnchorLine == n.selCursorLine && n.selAnchorCol <= n.selCursorCol) {
-		return n.selAnchorLine, n.selAnchorCol, n.selCursorLine, n.selCursorCol
-	}
-	return n.selCursorLine, n.selCursorCol, n.selAnchorLine, n.selAnchorCol
-}
-
-func (n *Notification) selectionRangeForLine(i, width int) (int, int, bool) {
-	sL, sC, eL, eC := n.normalizedSelection()
-	if i < sL || i > eL {
-		return 0, 0, false
-	}
-	left, right := 0, width
-	if i == sL {
-		left = sC
-	}
-	if i == eL {
-		right = eC
-	}
-	left = clampInt(left, 0, width)
-	right = clampInt(right, 0, width)
-	if right <= left {
-		return 0, 0, false
-	}
-	return left, right, true
-}
-
-func (n *Notification) selectionText() string {
-	if !n.hasSelection {
-		return ""
-	}
-	sL, _, eL, _ := n.normalizedSelection()
-	sL = clampInt(sL, 0, max(len(n.contentLines)-1, 0))
-	eL = clampInt(eL, 0, max(len(n.contentLines)-1, 0))
-	parts := make([]string, 0, eL-sL+1)
-	for i := sL; i <= eL; i++ {
-		line := n.contentLines[i]
-		width := lipgloss.Width(line)
-		left, right, ok := n.selectionRangeForLine(i, width)
-		if !ok {
-			parts = append(parts, "")
-			continue
-		}
-		segment := ansi.Strip(ansi.Cut(line, left, right))
-		if right >= width {
-			segment = strings.TrimRight(segment, " ")
-		}
-		parts = append(parts, segment)
-	}
-	return strings.Join(parts, "\n")
-}
-
-func (n *Notification) finalizeSelection() tea.Cmd {
-	text := n.selectionText()
-	if strings.TrimSpace(text) == "" {
-		n.clearSelection()
-		return nil
-	}
-	return tea.SetClipboard(text)
 }
 
 // pointInTitle returns true if (x, y) — screen absolute coords — falls on the title area,

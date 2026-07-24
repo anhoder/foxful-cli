@@ -29,15 +29,15 @@ type ContextMenu struct {
 	mouseX    int
 	mouseY    int
 
-	focused   int // keyboard-focused item index (-1 = none)
-	hovered   int // mouse-hovered item index (-1 = none)
+	focused     int // keyboard-focused item index (-1 = none)
+	hovered     int // mouse-hovered item index (-1 = none)
 	isDismissed bool
 	isCanceled  bool
-	selected  *ContextMenuItem
+	selected    *ContextMenuItem
 
-	bounds      popupRect
-	boundsSet   bool
-	itemBounds  []popupRect // absolute screen coordinates for each selectable item
+	bounds     popupRect
+	boundsSet  bool
+	itemBounds []popupRect // absolute screen coordinates for each selectable item
 }
 
 // NewContextMenu constructs a context menu anchored at (mouseX, mouseY).
@@ -108,9 +108,10 @@ func (cm *ContextMenu) dismissed() bool {
 	return cm.isDismissed
 }
 
-func (cm *ContextMenu) dismissOutside() {
+func (cm *ContextMenu) dismissOutside() bool {
 	cm.isDismissed = true
 	cm.isCanceled = true
+	return true
 }
 
 func (cm *ContextMenu) dismissEscape() {
@@ -286,8 +287,8 @@ func (cm *ContextMenu) renderModal(styles style.StyleSet) modalRender {
 		if cm.isSelectable(i) {
 			// Item is at row (1 + i) due to top border, spans innerWidth
 			itemBounds[i] = popupRect{
-				x: 1,              // left border offset
-				y: 1 + i,          // top border + row index
+				x: 1,     // left border offset
+				y: 1 + i, // top border + row index
 				w: innerWidth,
 				h: 1,
 			}

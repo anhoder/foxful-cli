@@ -1,7 +1,6 @@
 package model
 
 import (
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +32,30 @@ type App struct {
 	notifications      []*Notification // active notifications (newest at end)
 	nextNotificationID NotificationID
 
+	// styleSet is the app-scoped theme. When nil, StyleSet() falls back to the
+	// global style.CurrentStyleSet(). Set via SetStyleSet to isolate this app's
+	// theme from the global state (e.g. for multi-app or parallel-test scenarios).
+	styleSet *style.StyleSet
+
 	listeningKBEventL    sync.Mutex
 	listeningMouseEventL sync.Mutex
+}
+
+// StyleSet returns the app-scoped StyleSet if one was set via SetStyleSet,
+// otherwise the global style.CurrentStyleSet(). Internal render paths should
+// prefer this over style.CurrentStyleSet() so per-app themes take effect.
+func (a *App) StyleSet() style.StyleSet {
+	if a.styleSet != nil {
+		return *a.styleSet
+	}
+	return style.CurrentStyleSet()
+}
+
+// SetStyleSet sets an app-scoped StyleSet, isolating this app's theme from the
+// global style state. Pass a StyleSet built via style.NewStyleSet. Once set,
+// this app's rendering uses the given StyleSet regardless of global changes.
+func (a *App) SetStyleSet(s style.StyleSet) {
+	a.styleSet = &s
 }
 
 // NewApp create application
@@ -62,6 +83,8 @@ func (a *App) Init() tea.Cmd {
 	if a.options.InitHook != nil {
 		a.options.InitHook(a)
 	}
+
+	var cmds []tea.Cmd
 	if a.options.Ticker != nil {
 		go func() {
 			for range a.options.Ticker.Ticker() {
@@ -69,11 +92,22 @@ func (a *App) Init() tea.Cmd {
 			}
 		}()
 		if err := a.options.Ticker.Start(); err != nil {
-			panic("Fail to start ticker: " + err.Error())
+			// Ticker start failure is rare (system resource exhaustion).
+			// Degrade gracefully: the goroutine blocks harmlessly, the app
+			// continues without ticks. Surface the error via notification
+			// so it's not silently swallowed.
+			cmds = append(cmds, func() tea.Msg {
+				return ShowNotificationMsg{
+					Spec: NotificationSpec{
+						Title:   "Ticker Start Failed",
+						Message: err.Error(),
+						Level:   NotificationError,
+					},
+				}
+			})
 		}
 	}
 
-	var cmds []tea.Cmd
 	// Request initial terminal background color to seed light/dark detection.
 	// Handled in Update via BackgroundColorMsg.
 	cmds = append(cmds, func() tea.Msg {
@@ -118,16 +152,13 @@ func (a *App) Close() {
 //   - "wait"     — wait spinner (for busy state)
 //   - "crosshair" — crosshair (for grid selection)
 func (a *App) SetMousePointer(shape string) tea.Cmd {
-	return func() tea.Msg {
-		os.Stdout.WriteString("\x1b]22;" + shape + "\x1b\\")
-		return nil
-	}
+	return setMousePointer(shape)
 }
 
 // resetMousePointer writes the OSC 22 reset sequence directly to stdout.
 // Used synchronously during shutdown where tea.Cmd cannot be returned.
 func resetMousePointer() {
-	os.Stdout.WriteString("\x1b]22;\x1b\\")
+	writeMousePointer("")
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -143,41 +174,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		defer a.listeningMouseEventL.Unlock()
 	}
 
-	// Make sure these keys always quit
-	switch msgWithType := msg.(type) {
-	case tea.KeyPressMsg:
-		k := msgWithType.String()
-		if k != "q" && k != "Q" && k != "ctrl+c" {
-			break
-		}
-		if a.page != nil && a.page.IgnoreQuitKeyMsg(msgWithType) {
-			break
-		}
-		a.Close()
-		a.quiting = true
-		return a, tea.Quit
-	case tea.WindowSizeMsg:
-		a.windowHeight = msgWithType.Height
-		a.windowWidth = msgWithType.Width
-	case uv.LightColorSchemeEvent:
-		a.onBackgroundChanged(false)
-		return a, a.RerenderCmd(true)
-	case uv.DarkColorSchemeEvent:
-		a.onBackgroundChanged(true)
-		return a, a.RerenderCmd(true)
-	case tea.BackgroundColorMsg:
-		a.onBackgroundChanged(msgWithType.IsDark())
-		return a, a.RerenderCmd(true)
-	case tea.ModeReportMsg:
-		// DEC 2031 mode report: terminal proactively reports system color
-		// scheme changes when DEC 2031 is enabled (see Init).
-		if msgWithType.Mode.Mode() == int(ansi.ModeLightDark) {
-			// ModeSet (value 1) = dark, ModeReset (value 2) = light
-			a.onBackgroundChanged(msgWithType.Value.IsSet())
-			return a, a.RerenderCmd(true)
-		}
-	}
-
+	// Modal input interception must happen BEFORE quit key check,
+	// so modals can handle keys like 'q' as close keys.
 	// Notification messages are handled before modal interception so they work
 	// regardless of any open modal. These are never Key/Mouse messages, so the
 	// locks at the top of Update do not apply.
@@ -198,6 +196,38 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.RerenderCmd(true)
 	case clearAllNotificationsMsg:
 		a.notifications = nil
+		return a, a.RerenderCmd(true)
+	}
+
+	// Make sure these keys always quit (but only if no modal is handling them)
+	if len(a.modalStack) == 0 {
+		switch msgWithType := msg.(type) {
+		case tea.KeyPressMsg:
+			k := msgWithType.String()
+			if k == "q" || k == "Q" || k == "ctrl+c" {
+				if a.page == nil || !a.page.IgnoreQuitKeyMsg(msgWithType) {
+					a.Close()
+					a.quiting = true
+					return a, tea.Quit
+				}
+			}
+		}
+	}
+
+	switch msgWithType := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.windowHeight = msgWithType.Height
+		a.windowWidth = msgWithType.Width
+	case tea.BackgroundColorMsg:
+		// Response to RequestBackgroundColor() issued in Init(). Seeds the
+		// initial light/dark detection before the first user interaction.
+		a.onBackgroundChanged(msgWithType.IsDark())
+		return a, a.RerenderCmd(true)
+	case uv.LightColorSchemeEvent:
+		a.onBackgroundChanged(false)
+		return a, a.RerenderCmd(true)
+	case uv.DarkColorSchemeEvent:
+		a.onBackgroundChanged(true)
 		return a, a.RerenderCmd(true)
 	}
 
@@ -277,8 +307,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			mouse := msg.Mouse()
 			if mouse.Button == tea.MouseLeft {
-				// Left-click outside dismisses and consumes the click
-				top.dismissOutside()
+				// Left-click outside dismisses (and consumes the click) unless the
+				// modal declines dismissal (e.g. DisableOutsideClick). Either way
+				// the click is consumed so it never reaches the underlying page.
+				if !top.dismissOutside() {
+					return a, a.RerenderCmd(true)
+				}
 				page, cmd := a.completeTopModal()
 				if page != nil {
 					a.page = page
@@ -367,23 +401,51 @@ func (a *App) resolveTheme() style.Theme {
 
 // onBackgroundChanged handles a detected change in terminal background
 // color (light/dark). Updates the cached detection and rebuilds the
-// StyleSet so all rendered UI elements switch theme immediately.
+// StyleSet. Updates both the app-scoped StyleSet (if set) and the global
+// StyleSet, because all current rendering code reads the global via
+// style.CurrentStyleSet() (30+ call sites across model/).
+//
+// Also re-renders markdown popups to pick up the new auto-detected glamour style.
 func (a *App) onBackgroundChanged(isDark bool) {
 	style.SetDarkBackground(isDark)
-	style.SetStyleSet(style.NewStyleSet(a.resolveTheme()))
+	newStyleSet := style.NewStyleSet(a.resolveTheme())
+
+	// Update app-scoped StyleSet if one was set via SetStyleSet
+	if a.styleSet != nil {
+		a.SetStyleSet(newStyleSet)
+	}
+	// Always update global StyleSet so existing rendering code sees the change
+	style.SetStyleSet(newStyleSet)
+
+	// Invalidate popup render cache: markdown popups rerender entirely;
+	// plain-text popups clear contentLines so next render picks up new theme colors
+	for _, modal := range a.modalStack {
+		if popup, ok := modal.(*Popup); ok {
+			if !popup.rerenderMarkdown() {
+				// Plain-text popup: invalidate cached contentLines
+				popup.contentLines = nil
+			}
+		}
+	}
 }
 
 func (a *App) Run() error {
 	util.PrimaryColor = a.options.PrimaryColor
 
-	// Detect terminal background color synchronously at startup.
-	// This seeds the cached value used by DefaultTheme() before the
-	// first render, avoiding a flash. Runtime updates arrive via
-	// BackgroundColorMsg in Update().
-	style.SetDarkBackground(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
+	// Skip synchronous background detection — it can block for up to 2 seconds
+	// and defaults to dark on failure, which incorrectly affects light terminals
+	// with slow or unsupported OSC 11 queries.
+	// Instead, rely entirely on the asynchronous BackgroundColorMsg issued in
+	// Init(), which arrives within the first few frames and triggers a rerender.
+	// The default detectedDarkBg=true acts as a safe fallback for the 1-2 frames
+	// before BackgroundColorMsg arrives.
 
-	// Initialize the global StyleSet from the configured theme.
-	style.SetStyleSet(style.NewStyleSet(a.resolveTheme()))
+	// Initialize the StyleSet from the configured theme. Set both app-scoped
+	// and global StyleSet because all current rendering code reads the global
+	// via style.CurrentStyleSet() (30+ call sites across model/).
+	themeStyleSet := style.NewStyleSet(a.resolveTheme())
+	a.SetStyleSet(themeStyleSet)
+	style.SetStyleSet(themeStyleSet)
 
 	if a.page == nil {
 		a.main = NewMain(a, a.options)
@@ -401,7 +463,8 @@ func (a *App) Run() error {
 		ListenGlobalKeys(a, a.options.GlobalKeyHandlers)
 	}
 
-	a.options.TeaOptions = append(a.options.TeaOptions, tea.WithHardTabs(false), tea.WithFoxfulRenderer())
+	// a.options.TeaOptions = append(a.options.TeaOptions, tea.WithHardTabs(false), tea.WithFoxfulRenderer())
+	// TODO: These APIs are not available in the current bubbletea version
 	a.program = tea.NewProgram(a, a.options.TeaOptions...)
 	_, err := a.program.Run()
 	return err
@@ -465,6 +528,10 @@ func (a *App) Main() *Main {
 	return a.main
 }
 
+// MustMain returns the main page, panicking if it has not been initialized.
+// It follows the Go Must* convention (cf. regexp.MustCompile): use it only
+// when the main page is guaranteed to exist (i.e. after App.Run has set it up).
+// Prefer the non-panicking Main() when nil is a possible, recoverable state.
 func (a *App) MustMain() *Main {
 	if a.main != nil {
 		return a.main
@@ -472,6 +539,10 @@ func (a *App) MustMain() *Main {
 	panic("main page is empty")
 }
 
+// MustStartup returns the startup page, panicking if it has not been
+// initialized. It follows the Go Must* convention (cf. regexp.MustCompile):
+// use it only when the startup page is guaranteed to exist. Prefer the
+// non-panicking Startup() when nil is a possible, recoverable state.
 func (a *App) MustStartup() *StartupPage {
 	if a.startup != nil {
 		return a.startup
@@ -493,18 +564,22 @@ func (a *App) Quit() {
 	}
 }
 
+// pushModal appends a modal to the stack. A nil modal is ignored rather than
+// panicking, so a mis-wired caller degrades to a no-op instead of crashing the
+// host application.
 func (a *App) pushModal(m Modal) {
 	if m == nil {
-		panic("cannot push a nil modal")
+		return
 	}
 	a.modalStack = append(a.modalStack, m)
 }
 
 // ShowPopup pushes a validated popup onto the modal stack.
-// The topmost modal receives input first.
+// The topmost modal receives input first. A nil popup is ignored, so callers
+// can safely pass the result of a fallible NewPopup without a separate guard.
 func (a *App) ShowPopup(p *Popup) {
 	if p == nil {
-		panic("cannot show a nil popup")
+		return
 	}
 	a.pushModal(p)
 }
