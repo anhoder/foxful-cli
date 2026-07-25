@@ -969,6 +969,9 @@ func (m *Main) menuListView(a *App) string {
 		for i := lines; i < maxLines; i++ {
 			fillLines = append(fillLines, blankLine)
 		}
+		if lines > 0 {
+			menuListBuilder.WriteByte('\n')
+		}
 		menuListBuilder.WriteString(lipgloss.JoinVertical(lipgloss.Left, fillLines...))
 	}
 
