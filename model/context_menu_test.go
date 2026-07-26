@@ -191,7 +191,7 @@ func TestContextMenuItemAtHitTest(t *testing.T) {
 	cm := NewContextMenu(menu, 0, items, 10, 10)
 
 	// Render to get bounds
-	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()), 80, 24)
 	cm.setModalBounds(10, 10, 20, 4, rendered.itemBounds)
 
 	// itemBounds[0] should be at (11, 11) with width=innerWidth (depends on label)
@@ -217,7 +217,7 @@ func TestContextMenuMouseClickActivatesItem(t *testing.T) {
 	cm := NewContextMenu(menu, 0, items, 10, 10)
 
 	// Render and set bounds
-	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()), 80, 24)
 	cm.setModalBounds(10, 10, 20, 4, rendered.itemBounds)
 
 	// Simulate left-click on first item
@@ -265,7 +265,7 @@ func TestContextMenuEmptyItemsRendersMinWidth(t *testing.T) {
 	items := []ContextMenuItem{}
 	cm := NewContextMenu(menu, 0, items, 10, 10)
 
-	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()), 80, 24)
 
 	if rendered.content != "" {
 		t.Error("expected empty content for empty items")
@@ -381,7 +381,7 @@ func TestContextMenuDefaultsToUnlimitedDimensions(t *testing.T) {
 		{ID: "b", Label: "Second item"},
 	}
 	cm := NewContextMenu(&testMenu{}, 0, items, 0, 0)
-	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()), 80, 24)
 	plain := ansi.Strip(rendered.content)
 
 	if cm.maxWidth != 0 || cm.maxHeight != 0 {
@@ -404,7 +404,7 @@ func TestContextMenuMaxWidthTruncatesLabelWithEllipsis(t *testing.T) {
 		0,
 		ContextMenuOptions{MaxWidth: 12},
 	)
-	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()), 80, 24)
 	plain := ansi.Strip(rendered.content)
 
 	if got := lipgloss.Width(rendered.content); got != 12 {
@@ -428,7 +428,7 @@ func TestContextMenuMaxHeightRendersScrollbarAndMouseWheelScrolls(t *testing.T) 
 	}
 	cm := newContextMenu(&testMenu{}, 0, items, 0, 0, ContextMenuOptions{MaxHeight: 5})
 	styles := style.NewStyleSet(style.DefaultDarkTheme())
-	rendered := cm.renderModal(styles)
+	rendered := cm.renderModal(styles, 80, 24)
 	plain := ansi.Strip(rendered.content)
 
 	if got := lipgloss.Height(rendered.content); got != 5 {
@@ -456,7 +456,7 @@ func TestContextMenuMaxHeightRendersScrollbarAndMouseWheelScrolls(t *testing.T) 
 		t.Fatalf("wheel down handled=%v scrollOffset=%d, want true and 1", handled, cm.scrollOffset)
 	}
 
-	rendered = cm.renderModal(styles)
+	rendered = cm.renderModal(styles, 80, 24)
 	plain = ansi.Strip(rendered.content)
 	if strings.Contains(plain, "One") || !strings.Contains(plain, "Four") {
 		t.Fatalf("viewport did not advance after wheel down: %q", plain)

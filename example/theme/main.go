@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"image/color"
 	"os"
 	"time"
 
@@ -11,6 +10,24 @@ import (
 	"github.com/anhoder/foxful-cli/model"
 	"github.com/anhoder/foxful-cli/style"
 )
+
+// AppCustomTheme defines the custom styles with full Highlight fields
+// that support presets, foreground, background, and attributes.
+type AppCustomTheme struct {
+	BannerColor    style.Highlight
+	HighlightColor style.Highlight
+	AppExtra       style.Highlight
+}
+
+// AppCustomStyles is the resolved version of AppCustomTheme, where all
+// Highlight fields have been resolved through the preset pipeline and
+// converted to lipgloss.Style. Use style.CustomStyles[AppCustomStyles]()
+// to obtain a typed instance from the global StyleSet.
+type AppCustomStyles struct {
+	BannerColor    lipgloss.Style
+	HighlightColor lipgloss.Style
+	AppExtra       lipgloss.Style
+}
 
 // ThemeController handles the 't' key by showing a popup with theme info.
 // It demonstrates accessing custom styles via style.CurrentStyleSet().Custom.
@@ -32,18 +49,13 @@ func (c *ThemeController) KeyMsgHandle(msg tea.KeyMsg, a *model.App) (bool, mode
 
 	styles := style.CurrentStyleSet()
 
-	// Access custom domain styles from the global StyleSet.
-	bannerStyle, ok := styles.Custom["bannerColor"]
-	if !ok {
-		bannerStyle = lipgloss.NewStyle().Foreground(lipgloss.BrightGreen)
-	}
-	highlightStyle, ok := styles.Custom["highlightColor"]
-	if !ok {
-		highlightStyle = lipgloss.NewStyle().Foreground(lipgloss.BrightYellow)
-	}
+	// Access custom domain styles via type-safe struct conversion.
+	custom := style.CustomStyles[AppCustomStyles](styles)
+	bannerStyle := custom.BannerColor
+	highlightStyle := custom.HighlightColor
 
 	// Use bannerColor to style the popup title.
-	popupTitle := bannerStyle.Bold(true).Render("Theme Colors")
+	popupTitle := bannerStyle.Bold(true).Render("Theme Colors (press T to switch)")
 	now := time.Now().Format("15:04:05")
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -134,46 +146,29 @@ func main() {
 	}
 	fmt.Printf("Detected terminal background: %s mode\n", mode)
 
-	// Start with the auto-detected default theme, then customize it.
-	theme := style.DefaultTheme()
-
-	// ── Step 2: Define custom highlight presets ──
-	// User-defined presets override built-in presets with the same name.
-	theme.HighlightPresets = map[string]style.Highlight{
+	// Build theme list for runtime switching. Press 'T' to cycle.
+	darkTheme := style.DefaultDarkTheme()
+	darkTheme.HighlightPresets = map[string]style.Highlight{
 		"accent": {Fg: lipgloss.Color("#FF5F87"), Bold: style.BoolPtr(true)},
-		"dimmed": {Fg: lipgloss.Color("#6E6E6E")},
+	}
+	darkTheme.Custom = AppCustomTheme{
+		BannerColor:    style.Highlight{Fg: lipgloss.Color("#FF5F87")},
+		HighlightColor: style.Highlight{Fg: lipgloss.Color("#00FF00")},
+		AppExtra:       style.Highlight{Fg: lipgloss.Color("#FFA500")},
 	}
 
-	// ── Step 3: Apply presets to Highlight fields ──
-	// Use the Preset field to reference a built-in or custom preset.
-	// Explicit fields (like Fg here on Subtitle) override preset values.
-	theme.StatusBar.Preset = "normal"                 // uses built-in "normal" preset
-	theme.SelectedItem.Preset = "normal"              // uses built-in "normal" preset
-	theme.SelectedItem.Fg = lipgloss.Color("#00D7FF") // override preset with explicit Fg
-	theme.BackButton.Preset = "bold"                  // uses built-in "bold" preset
-	theme.Popup.Title.Preset = "accent"               // uses custom "accent" preset
+	lightTheme := style.DefaultLightTheme()
+	lightTheme.Custom = AppCustomTheme{
+		BannerColor:    style.Highlight{Fg: lipgloss.Color("#1565C0")},
+		HighlightColor: style.Highlight{Fg: lipgloss.Color("#2E7D32")},
+		AppExtra:       style.Highlight{Fg: lipgloss.Color("#E65100")},
+	}
 
-	// StatusBar gets a dark background via explicit field (preset doesn't set Bg)
-	theme.StatusBar.Bg = lipgloss.Color("#1E1E1E")
-
-	// You can still set fields directly without any preset
-	theme.MenuTitle.Fg = lipgloss.Color("#FF5F87")
-	theme.Subtitle.Fg = lipgloss.Color("#6E6E6E")
-	theme.StatusBarTime.Bg = lipgloss.Color("#333333")
-
-	// ── Step 4: Configure hover highlight overrides ──
-	// Hover highlights control mouse hover feedback for interactive elements.
-	// Each has sensible defaults derived from the element's normal style.
-	theme.MenuItemHover.Fg = lipgloss.Color("#FF5F87")      // hovered menu items turn accent
-	theme.MenuItemHover.Underline = style.BoolPtr(false)    // disable default underline
-	theme.BackButtonHover.Fg = lipgloss.Color("#00D7FF")    // hovered back button color
-	theme.SelectedItemHover.Underline = style.BoolPtr(true) // underline selected item on hover
-
-	// ── Step 5: Add custom domain colors.
-	theme.Custom = map[string]color.Color{
-		"bannerColor":    lipgloss.Color("#FF5F87"),
-		"highlightColor": lipgloss.Color("#00FF00"),
-		"appExtra":       lipgloss.Color("#FFA500"),
+	vscodeTheme := style.VSCodeDarkTheme()
+	vscodeTheme.Custom = AppCustomTheme{
+		BannerColor:    style.Highlight{Fg: lipgloss.Color("#569CD6")},
+		HighlightColor: style.Highlight{Fg: lipgloss.Color("#6A9955")},
+		AppExtra:       style.Highlight{Fg: lipgloss.Color("#DCDCAA")},
 	}
 
 	// ── Step 6: Build the app with the custom theme ──
@@ -185,10 +180,9 @@ func main() {
 	opts.KBControllers = []model.KeyboardController{&ThemeController{}}
 
 	app := model.NewApp(opts)
-	// Use the auto-detected theme as both dark and light variants.
-	// WithThemePair enables adaptive switching at runtime.
 	app.With(
-		model.WithThemePair(theme, theme),
+		model.WithThemeList(darkTheme, lightTheme, vscodeTheme),
+		model.WithThemeSwitchKey("T"),
 		model.WithMainMenu(NewMainMenu(), &model.MenuItem{Title: "Theme Demo"}),
 	)
 
