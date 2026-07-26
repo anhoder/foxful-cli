@@ -1,10 +1,14 @@
 package model
 
 import (
+	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/anhoder/foxful-cli/style"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type testMenu struct {
@@ -47,12 +51,26 @@ func TestContextMenuComputePositionFlipsRight(t *testing.T) {
 	if x > 75 {
 		t.Errorf("expected menu to flip left, got x=%d", x)
 	}
-	if y != 10 {
-		t.Errorf("expected y=10, got y=%d", y)
+	if y != 11 {
+		t.Errorf("expected y=11, got y=%d", y)
 	}
 }
 
-func TestContextMenuComputePositionFlipsBottom(t *testing.T) {
+func TestContextMenuPositionLeavesClickedRowVisible(t *testing.T) {
+	menu := &testMenu{items: []MenuItem{{Title: "Test"}}}
+	items := []ContextMenuItem{{ID: "a", Label: "Action A"}}
+	cm := NewContextMenu(menu, 0, items, 10, 10)
+
+	_, y := cm.computePosition(80, 24, 20, 5)
+	if y != 11 {
+		t.Errorf("menu y=%d, want 11 (one row below clicked row)", y)
+	}
+	if y <= cm.mouseY {
+		t.Errorf("menu y=%d overlaps clicked row y=%d", y, cm.mouseY)
+	}
+}
+
+func TestContextMenuComputePositionClampsToBottom(t *testing.T) {
 	menu := &testMenu{items: []MenuItem{{Title: "Test"}}}
 	items := []ContextMenuItem{
 		{ID: "a", Label: "Action A"},
@@ -60,15 +78,13 @@ func TestContextMenuComputePositionFlipsBottom(t *testing.T) {
 	}
 	cm := NewContextMenu(menu, 0, items, 10, 22) // near bottom edge
 
-	// Simulate a 5-tall menu at y=22 in a 24-tall terminal
+	// A 5-tall menu in a 24-row terminal should align with the bottom edge.
 	x, y := cm.computePosition(80, 24, 20, 5)
-
 	if x != 10 {
 		t.Errorf("expected x=10, got x=%d", x)
 	}
-	// Should flip up: y = 22 - 5 = 17
-	if y > 22 {
-		t.Errorf("expected menu to flip up, got y=%d", y)
+	if y != 19 {
+		t.Errorf("expected menu to clamp down to y=19, got y=%d", y)
 	}
 }
 
@@ -100,27 +116,27 @@ func TestContextMenuKeyboardNavigation(t *testing.T) {
 	}
 	cm := NewContextMenu(menu, 0, items, 10, 10)
 
-	// Initial focus should be on first selectable (index 0)
-	if cm.focused != 0 {
-		t.Errorf("initial focused=%d, want 0", cm.focused)
+	// Opening a context menu must not preselect an action.
+	if cm.focused != -1 {
+		t.Errorf("initial focused=%d, want -1", cm.focused)
 	}
 
-	// Down should skip separator and disabled, land on index 3
+	// Down selects the first selectable item.
+	cm.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if cm.focused != 0 {
+		t.Errorf("after down, focused=%d, want 0", cm.focused)
+	}
+
+	// Down skips the separator and disabled item.
 	cm.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	if cm.focused != 3 {
-		t.Errorf("after down, focused=%d, want 3 (skipping separator and disabled)", cm.focused)
+		t.Errorf("after second down, focused=%d, want 3 (skipping separator and disabled)", cm.focused)
 	}
 
-	// Down again should wrap to index 0
-	cm.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	if cm.focused != 0 {
-		t.Errorf("after second down, focused=%d, want 0 (wrap)", cm.focused)
-	}
-
-	// Up should wrap to index 3
+	// Up returns to the first selectable item.
 	cm.update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
-	if cm.focused != 3 {
-		t.Errorf("after up, focused=%d, want 3 (wrap)", cm.focused)
+	if cm.focused != 0 {
+		t.Errorf("after up, focused=%d, want 0", cm.focused)
 	}
 }
 
@@ -253,5 +269,213 @@ func TestContextMenuEmptyItemsRendersMinWidth(t *testing.T) {
 
 	if rendered.content != "" {
 		t.Error("expected empty content for empty items")
+	}
+}
+
+func TestContextMenuHoverStyleUsesThemedBackgroundWithoutUnderline(t *testing.T) {
+	hoverBackground := lipgloss.Color("#123456")
+	theme := style.DefaultDarkTheme()
+	theme.Popup.ContextMenuItemHover = style.Highlight{Bg: hoverBackground}
+	styles := style.NewStyleSet(theme)
+
+	cm := NewContextMenu(&testMenu{}, 0, []ContextMenuItem{{ID: "a", Label: "Action"}}, 0, 0)
+	cm.hovered = 0
+	itemStyle := cm.itemStyle(styles, 0)
+
+	if got := itemStyle.GetBackground(); got != hoverBackground {
+		t.Errorf("hover background = %v, want %v", got, hoverBackground)
+	}
+	if itemStyle.GetUnderline() {
+		t.Error("context menu hover style must not underline text by default")
+	}
+}
+
+func TestContextMenuChromeStylesUseThemedColors(t *testing.T) {
+	borderColor := lipgloss.Color("#234567")
+	separatorColor := lipgloss.Color("#345678")
+	theme := style.DefaultDarkTheme()
+	theme.Popup.ContextMenuBorder = borderColor
+	theme.Popup.ContextMenuSeparator = separatorColor
+	styles := style.NewStyleSet(theme)
+
+	if got := styles.Popup.ContextMenuFrame.GetBorderTopForeground(); got != borderColor {
+		t.Errorf("border color = %v, want %v", got, borderColor)
+	}
+	if got := styles.Popup.ContextMenuSeparator.GetForeground(); got != separatorColor {
+		t.Errorf("separator color = %v, want %v", got, separatorColor)
+	}
+}
+
+func TestContextMenuDefaultHoverStyleHasBackground(t *testing.T) {
+	styles := style.NewStyleSet(style.DefaultDarkTheme())
+	if styles.Popup.ContextMenuItemHover.GetBackground() == styles.Popup.Surface {
+		t.Error("default context menu hover background must differ from the popup surface")
+	}
+	if styles.Popup.ContextMenuItemHover.GetUnderline() {
+		t.Error("default context menu hover style must not underline text")
+	}
+}
+
+func TestContextMenuDefaultChromeColors(t *testing.T) {
+	tests := []struct {
+		name  string
+		theme style.Theme
+		want  string
+	}{
+		{name: "dark", theme: style.DefaultDarkTheme(), want: "#5C5C5C"},
+		{name: "light", theme: style.DefaultLightTheme(), want: "#A8A8A8"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			styles := style.NewStyleSet(tt.theme)
+			want := lipgloss.Color(tt.want)
+			if got := styles.Popup.ContextMenuFrame.GetBorderTopForeground(); got != want {
+				t.Errorf("default border color = %v, want %v", got, want)
+			}
+			if got := styles.Popup.ContextMenuSeparator.GetForeground(); got != want {
+				t.Errorf("default separator color = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestContextMenuItemStyleLeavesForegroundUnset(t *testing.T) {
+	styles := style.NewStyleSet(style.DefaultDarkTheme())
+	if got := styles.Popup.ContextMenuItem.GetForeground(); got != (lipgloss.NoColor{}) {
+		t.Errorf("default context menu item color = %v, want no explicit foreground", got)
+	}
+}
+
+func TestContextMenuItemStylesUsePopupTheme(t *testing.T) {
+	normalColor := lipgloss.Color("#111111")
+	focusedColor := lipgloss.Color("#222222")
+	disabledColor := lipgloss.Color("#333333")
+	theme := style.DefaultDarkTheme()
+	theme.Popup.ContextMenuItem = style.Highlight{Fg: normalColor}
+	theme.Popup.ContextMenuItemFocused = style.Highlight{Fg: focusedColor}
+	theme.Popup.ContextMenuItemDisabled = style.Highlight{Fg: disabledColor}
+	styles := style.NewStyleSet(theme)
+
+	cm := NewContextMenu(&testMenu{}, 0, []ContextMenuItem{
+		{ID: "normal", Label: "Normal"},
+		{ID: "focused", Label: "Focused"},
+		{ID: "disabled", Label: "Disabled", Disabled: true},
+	}, 0, 0)
+	cm.focused = 1
+
+	if got := cm.itemStyle(styles, 0).GetForeground(); got != normalColor {
+		t.Errorf("normal item color = %v, want %v", got, normalColor)
+	}
+	if got := cm.itemStyle(styles, 1).GetForeground(); got != focusedColor {
+		t.Errorf("focused item color = %v, want %v", got, focusedColor)
+	}
+	if got := cm.itemStyle(styles, 2).GetForeground(); got != disabledColor {
+		t.Errorf("disabled item color = %v, want %v", got, disabledColor)
+	}
+}
+
+func TestContextMenuDefaultsToUnlimitedDimensions(t *testing.T) {
+	items := []ContextMenuItem{
+		{ID: "a", Label: "A context menu label that stays complete"},
+		{ID: "b", Label: "Second item"},
+	}
+	cm := NewContextMenu(&testMenu{}, 0, items, 0, 0)
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	plain := ansi.Strip(rendered.content)
+
+	if cm.maxWidth != 0 || cm.maxHeight != 0 {
+		t.Fatalf("default limits = (%d, %d), want unlimited (0, 0)", cm.maxWidth, cm.maxHeight)
+	}
+	if !strings.Contains(plain, items[0].Label) || strings.Contains(plain, "…") {
+		t.Fatalf("default rendering unexpectedly truncated label: %q", plain)
+	}
+	if got := lipgloss.Height(rendered.content); got != len(items)+contextMenuFrameOverhead {
+		t.Fatalf("default height = %d, want %d", got, len(items)+contextMenuFrameOverhead)
+	}
+}
+
+func TestContextMenuMaxWidthTruncatesLabelWithEllipsis(t *testing.T) {
+	cm := newContextMenu(
+		&testMenu{},
+		0,
+		[]ContextMenuItem{{ID: "a", Label: "1234567890ABC"}},
+		0,
+		0,
+		ContextMenuOptions{MaxWidth: 12},
+	)
+	rendered := cm.renderModal(style.NewStyleSet(style.DefaultDarkTheme()))
+	plain := ansi.Strip(rendered.content)
+
+	if got := lipgloss.Width(rendered.content); got != 12 {
+		t.Fatalf("rendered width = %d, want configured maximum 12", got)
+	}
+	if !strings.Contains(plain, "1234567…") {
+		t.Fatalf("truncated label does not contain expected ellipsis: %q", plain)
+	}
+	if strings.Contains(plain, "1234567890ABC") {
+		t.Fatalf("rendered menu still contains the complete overlong label: %q", plain)
+	}
+}
+
+func TestContextMenuMaxHeightRendersScrollbarAndMouseWheelScrolls(t *testing.T) {
+	items := []ContextMenuItem{
+		{ID: "one", Label: "One"},
+		{ID: "two", Label: "Two"},
+		{ID: "three", Label: "Three"},
+		{ID: "four", Label: "Four"},
+		{ID: "five", Label: "Five"},
+	}
+	cm := newContextMenu(&testMenu{}, 0, items, 0, 0, ContextMenuOptions{MaxHeight: 5})
+	styles := style.NewStyleSet(style.DefaultDarkTheme())
+	rendered := cm.renderModal(styles)
+	plain := ansi.Strip(rendered.content)
+
+	if got := lipgloss.Height(rendered.content); got != 5 {
+		t.Fatalf("rendered height = %d, want configured maximum 5", got)
+	}
+	if !strings.Contains(plain, "│") || !strings.Contains(plain, "█") {
+		t.Fatalf("overflowing context menu has no visible scrollbar: %q", plain)
+	}
+	if !strings.Contains(plain, "One") || !strings.Contains(plain, "Three") || strings.Contains(plain, "Four") {
+		t.Fatalf("initial viewport is incorrect: %q", plain)
+	}
+	if rendered.itemBounds[3].h != 0 {
+		t.Fatalf("off-screen item has clickable bounds: %+v", rendered.itemBounds[3])
+	}
+
+	w := lipgloss.Width(rendered.content)
+	h := lipgloss.Height(rendered.content)
+	cm.setModalBounds(0, 0, w, h, rendered.itemBounds)
+	handled, _ := cm.handleMouse(tea.MouseWheelMsg(tea.Mouse{
+		X:      1,
+		Y:      1,
+		Button: tea.MouseWheelDown,
+	}))
+	if !handled || cm.scrollOffset != 1 {
+		t.Fatalf("wheel down handled=%v scrollOffset=%d, want true and 1", handled, cm.scrollOffset)
+	}
+
+	rendered = cm.renderModal(styles)
+	plain = ansi.Strip(rendered.content)
+	if strings.Contains(plain, "One") || !strings.Contains(plain, "Four") {
+		t.Fatalf("viewport did not advance after wheel down: %q", plain)
+	}
+}
+
+func TestMainContextMenuUsesConfiguredLimits(t *testing.T) {
+	app, main := newMainForMenuMouseTest(t)
+	app.With(WithContextMenuOptions(ContextMenuOptions{MaxWidth: 18, MaxHeight: 4}))
+	main.mouseClickHandle(tea.Mouse{X: 0, Y: main.menuListStartRow, Button: tea.MouseRight}, app)
+
+	if !app.HasPopup() {
+		t.Fatal("right click did not open a context menu")
+	}
+	cm, ok := app.modalStack[len(app.modalStack)-1].(*ContextMenu)
+	if !ok {
+		t.Fatalf("top modal = %T, want *ContextMenu", app.modalStack[len(app.modalStack)-1])
+	}
+	if cm.maxWidth != 18 || cm.maxHeight != 4 {
+		t.Fatalf("context menu limits = (%d, %d), want (18, 4)", cm.maxWidth, cm.maxHeight)
 	}
 }

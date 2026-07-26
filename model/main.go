@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,7 @@ import (
 	"github.com/anhoder/foxful-cli/layout"
 	"github.com/anhoder/foxful-cli/style"
 	"github.com/anhoder/foxful-cli/util"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -50,7 +52,10 @@ type Main struct {
 	// loadingTips from being rendered), the hook is deferred to the
 	// next tick. This allows the current View() cycle to render the
 	// loading text before the hook executes.
-	pendingEnterMenu *enterMenuDeferred
+	pendingEnterMenu   *enterMenuDeferred
+	pendingRefreshMenu *refreshMenuDeferred
+	pendingMenuAction  *menuActionDeferred
+	pendingAction      *actionDeferred // 通用延迟动作
 
 	menu Menu // current menu
 
@@ -71,6 +76,9 @@ type Main struct {
 
 	// Mouse hover tracking for menu list items
 	hoveredMenuItemIdx int // -1 = none, 0+ = index in menuList
+
+	// Mouse hover tracking for tabs
+	hoveredTabIdx int // -1 = none, 0+ = tab index
 
 	// hoveredBackButton tracks whether the mouse is hovering over the back
 	// button shown before the menu title when inside a submenu.
@@ -111,6 +119,26 @@ type enterMenuDeferred struct {
 	stackItem *menuStackItem
 }
 
+// refreshMenuDeferred 保存延迟刷新当前菜单所需的状态。
+type refreshMenuDeferred struct {
+	menu    Menu
+	loading *Loading
+}
+
+// actionDeferred 保存通用延迟动作的状态。
+type actionDeferred struct {
+	action  func(*Main) (bool, Page) // 延迟执行的逻辑，返回（是否继续、目标页面）
+	loading *Loading                 // 加载提示控制器
+}
+
+// menuActionDeferred holds an activated menu item until its loading state has rendered.
+type menuActionDeferred struct {
+	menu    Menu
+	index   int
+	item    MenuItem
+	loading *Loading
+}
+
 func NewMain(app *App, options *Options) (m *Main) {
 	var mainMenuTitle *MenuItem
 	if options.MainMenuTitle != nil {
@@ -134,6 +162,7 @@ func NewMain(app *App, options *Options) (m *Main) {
 		statusBar:            options.StatusBar,
 		hoveredBreadcrumbIdx: -1,
 		hoveredMenuItemIdx:   -1,
+		hoveredTabIdx:        -1,
 		hoveredBackButton:    false,
 		hoverPointerActive:   false,
 	}
@@ -238,6 +267,64 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.mouseMsgHandle(msg, a)
 	case tickMainMsg:
+		// Priority 1: invoke the selected item's Action after rendering its loading state.
+		if m.pendingMenuAction != nil {
+			p := m.pendingMenuAction
+			m.pendingMenuAction = nil
+
+			actionPage, actionCmd := p.menu.Action(m.app, p.index)
+			if actionPage != nil || actionCmd != nil {
+				p.loading.Complete()
+				return actionPage, actionCmd
+			}
+
+			submenu := p.menu.SubMenu(m.app, p.index)
+			if submenu == nil {
+				p.loading.Complete()
+				return m, a.RerenderCmd(true)
+			}
+
+			p.loading.Complete()
+			newPage := m.enterMenuWithLoading(submenu, &p.item)
+			if m.pendingEnterMenu != nil {
+				return m, a.RerenderCmd(true)
+			}
+			if newPage != nil {
+				return newPage, func() tea.Msg { return newPage.Msg() }
+			}
+			return m, a.RerenderCmd(true)
+		}
+
+		// Priority 2: run a generic deferred action.
+		if m.pendingAction != nil {
+			p := m.pendingAction
+			m.pendingAction = nil
+
+			shouldContinue, newPage := p.action(m)
+			p.loading.Complete()
+
+			if !shouldContinue && newPage != nil {
+				return newPage, func() tea.Msg { return newPage.Msg() }
+			}
+			return m, a.RerenderCmd(true)
+		}
+		if m.pendingRefreshMenu != nil {
+			p := m.pendingRefreshMenu
+			m.pendingRefreshMenu = nil
+
+			if hook := p.menu.BeforeEnterMenuHook(); hook != nil {
+				if res, newPage := hook(m); !res {
+					p.loading.Complete()
+					if newPage != nil {
+						return newPage, func() tea.Msg { return newPage.Msg() }
+					}
+					return m, a.RerenderCmd(true)
+				}
+			}
+			m.menuList = p.menu.MenuViews()
+			p.loading.Complete()
+			return m, a.RerenderCmd(true)
+		}
 		if m.pendingEnterMenu != nil {
 			p := m.pendingEnterMenu
 			m.pendingEnterMenu = nil
@@ -284,6 +371,10 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 		if !m.options.WhetherDisplayTitle && m.menuStartRow > 1 {
 			m.menuStartRow--
 		}
+		// When status bar is at top, it replaces the title bar (forced override).
+		if m.statusBar != nil && m.options.StatusBarPosition == StatusBarTop {
+			m.options.WhetherDisplayTitle = false
+		}
 		if m.isDualColumn {
 			switch {
 			case msg.Width < 100:
@@ -308,6 +399,10 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 		if m.options.BottomHeight > 0 {
 			bottomHeight = m.options.BottomHeight
 		}
+		// Reserve space for status bar (DefaultStatusBar = 1 row).
+		if m.statusBar != nil {
+			bottomHeight++
+		}
 		if m.options.DynamicRowCount {
 			maxEntries := (msg.Height - m.menuStartRow - bottomHeight) * m.getNumColumns()
 			if maxEntries > 10 {
@@ -324,17 +419,23 @@ func (m *Main) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 
 		// Leading rows before the menu list:
 		// - Title bar (if displayed): 1 row
+		// - Status bar at top (if configured): 1 row (replaces title bar, same layout effect)
 		// - Filler blank lines: strings.Repeat("\n", titleStartRow-1) → getLines produces titleStartRow parts
 		// - Menu title: 1 row
-		// - Gap "\n": getLines splits into 2 empty parts → 2 rows
+		// - Gap "": empty string renders as 1 visual row in JoinVertical
 		leadingRows := 0
 		if m.options.WhetherDisplayTitle {
+			leadingRows++
+		}
+		// When status bar is at top, it occupies row 0 like the title bar does,
+		// so leadingRows must account for it even though WhetherDisplayTitle is forced false.
+		if m.statusBar != nil && m.options.StatusBarPosition == StatusBarTop {
 			leadingRows++
 		}
 		if titleStartRow > 1 {
 			leadingRows += titleStartRow
 		}
-		leadingRows += 3 // menu title (1) + gap "\n" → getLines produces 2 parts
+		leadingRows += 2 // menu title (1) + gap "" (1 visual row, see line 429)
 
 		m.menuListStartRow = leadingRows
 
@@ -376,8 +477,11 @@ func (m *Main) View(a *App) string {
 
 	var sections []string
 
-	// ── 1. Title bar ──
-	if m.options.WhetherDisplayTitle {
+	// ── 1. Top bar: status bar (when position=top) OR title bar ──
+	if m.statusBar != nil && m.options.StatusBarPosition == StatusBarTop {
+		statusBarView := m.statusBar.View(a, m)
+		sections = append(sections, statusBarView)
+	} else if m.options.WhetherDisplayTitle {
 		sections = append(sections, m.TitleView(a))
 	}
 
@@ -385,6 +489,7 @@ func (m *Main) View(a *App) string {
 	if m.options.EnableTabs && m.tabs != nil {
 		// Update tabs widget size to match window width
 		m.tabs.SetSize(w, 0) // height auto-calculated by tabs widget
+		m.tabs.SetHovered(m.hoveredTabIdx)
 		sections = append(sections, m.tabs.View())
 	}
 
@@ -425,10 +530,16 @@ func (m *Main) View(a *App) string {
 		}
 		sections = append(sections, m.menuTitleViewContent(a, mt))
 
-		// Vertical gap: title row → menu start row
-		sections = append(sections, "\n")
+		// Vertical gap: title row → menu start row (empty string = 1 visual row in JoinVertical)
+		sections = append(sections, "")
 		sections = append(sections, m.menuListView(a))
-		sections = append(sections, m.searchInputView(a))
+
+		// Only append searchInput if non-empty (matches component loop pattern at line 442).
+		// When not searching and menu has no HelpHints, searchInputView returns "" which
+		// JoinVertical counts as 1 phantom row, causing +1 overflow and title truncation.
+		if searchView := m.searchInputView(a); searchView != "" {
+			sections = append(sections, searchView)
+		}
 	} else {
 		sections = append(sections, "\n\n\n")
 	}
@@ -450,14 +561,23 @@ func (m *Main) View(a *App) string {
 	// ── 5. Status bar at bottom ──
 	statusBarView := ""
 	statusBarH := 0
-	if m.statusBar != nil {
+	if m.statusBar != nil && m.options.StatusBarPosition == StatusBarBottom {
 		statusBarView = m.statusBar.View(a, m)
 		statusBarH = lipgloss.Height(statusBarView)
 	}
 
-	// Height-fill: pad content to fill space before status bar
-	if lipgloss.Height(body) < h-statusBarH {
-		body = lipgloss.NewStyle().Height(h - statusBarH).Render(body)
+	// ── 6. Adjust body height for status bar ──
+	// Components use a.WindowHeight() which doesn't account for the status bar.
+	// Trim body to targetHeight to prevent overflow when status bar is present.
+	targetHeight := h - statusBarH
+	bodyHeight := lipgloss.Height(body)
+	if bodyHeight > targetHeight {
+		lines := strings.Split(body, "\n")
+		if len(lines) > targetHeight {
+			body = strings.Join(lines[:targetHeight], "\n")
+		}
+	} else if bodyHeight < targetHeight {
+		body = lipgloss.NewStyle().Height(targetHeight).Render(body)
 	}
 
 	// Combine body + status bar, then wrap with AppBackground.
@@ -495,6 +615,52 @@ func (m *Main) MenuStartRow() int {
 
 func (m *Main) MenuBottomRow() int {
 	return m.menuBottomRow
+}
+
+func (m *Main) StatusBar() StatusBar {
+	return m.statusBar
+}
+
+func (m *Main) StatusBarPosition() StatusBarPosition {
+	return m.options.StatusBarPosition
+}
+
+// EffectiveWindowHeight returns the available height for page content
+// excluding the status bar (if present). Components should use this for
+// layout calculations instead of a.WindowHeight() when positioning content
+// that should not overlap the status bar.
+func (m *Main) EffectiveWindowHeight(a *App) int {
+	h := a.WindowHeight()
+	if m.statusBar == nil {
+		return h
+	}
+
+	// Status bar at bottom always consumes 1 extra row
+	if m.options.StatusBarPosition == StatusBarBottom {
+		return h - 1
+	}
+
+	// Status bar at top occupies row 0 but leaves the bottom row free.
+	// Whether it replaces a title bar or sits alone doesn't affect the
+	// bottom boundary — content can always extend to row h-1.
+	return h
+}
+
+// statusBarRowY returns the 0-based screen row where the status bar is rendered.
+// Returns -1 if no status bar is configured.
+func (m *Main) statusBarRowY(a *App) int {
+	if m.statusBar == nil {
+		return -1
+	}
+
+	switch m.options.StatusBarPosition {
+	case StatusBarTop:
+		return 0 // Top row
+	case StatusBarBottom:
+		return a.WindowHeight() - 1 // Last row
+	default:
+		return -1
+	}
 }
 
 func (m *Main) IsDualColumn() bool {
@@ -629,6 +795,9 @@ func (m *Main) tabIndexAt(x, y int, a *App) int {
 	tabBarStartRow := 0
 	if m.options.WhetherDisplayTitle {
 		tabBarStartRow++ // Title bar takes 1 row
+	}
+	if m.statusBar != nil && m.options.StatusBarPosition == StatusBarTop {
+		tabBarStartRow++
 	}
 
 	// Tab bar with borders occupies ~3 rows (top border + content + bottom border)
@@ -890,36 +1059,7 @@ func (m *Main) centeredMenuView(a *App, lines int) string {
 	}
 	allSongs = append(allSongs, nil)
 
-	slices.Sort(titleLengths)
-	maxSongTitleLength := 0
-	if len(titleLengths) > 0 {
-		maxSongTitleLength = titleLengths[len(titleLengths)-1]
-	}
-	if len(titleLengths) >= 6 && maxSongTitleLength >= 30 {
-		// Drop the longest 30% of all titles to prevent the menu from being stretched too long due to outliers
-		maxSongTitleLength = titleLengths[int32(0.7*float32(len(titleLengths)))]
-		if maxSongTitleLength < 30 {
-			maxSongTitleLength = 30
-		}
-	}
-
-	// Songs have 4 spaces built-in at the front, so we need 4 columns on the right side to balance spaces
-	remainingWindowWidth := a.windowWidth - 4
-
-	// Extra padding applied to every segment.
-	// If the window is wide, we want more padding.
-	extraPadding := (a.windowWidth - 40) / 5
-	if extraPadding < 0 {
-		extraPadding = 0
-	}
-	remainingWindowWidth -= extraPadding
-
-	itemMaxLength := remainingWindowWidth / m.getNumColumns()
-
-	entryLength := maxSongTitleLength + 6 + m.getMaxIndexWidth()
-	if entryLength > itemMaxLength {
-		entryLength = itemMaxLength
-	}
+	entryLength := m.centeredEntryLength(a, titleLengths)
 
 	var rows []string
 	for i := 0; i < lines; i++ {
@@ -935,6 +1075,34 @@ func (m *Main) centeredMenuView(a *App, lines int) string {
 		}
 	}
 	return layout.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m *Main) centeredEntryLength(a *App, titleLengths []int) int {
+	slices.Sort(titleLengths)
+
+	maxTitleWidth := 0
+	if len(titleLengths) > 0 {
+		maxTitleWidth = titleLengths[len(titleLengths)-1]
+	}
+	if len(titleLengths) >= 6 && maxTitleWidth >= 30 {
+		maxTitleWidth = titleLengths[int32(0.7*float32(len(titleLengths)))]
+		if maxTitleWidth < 30 {
+			maxTitleWidth = 30
+		}
+	}
+
+	remainingWidth := a.windowWidth - 4
+	extraPadding := (a.windowWidth - 40) / 5
+	if extraPadding > 0 {
+		remainingWidth -= extraPadding
+	}
+
+	itemMaxLength := remainingWidth / m.getNumColumns()
+	entryLength := maxTitleWidth + 6 + m.getMaxIndexWidth()
+	if entryLength > itemMaxLength {
+		return itemMaxLength
+	}
+	return entryLength
 }
 
 func (m *Main) menuListView(a *App) string {
@@ -1135,6 +1303,11 @@ func (m *Main) menuTitleY() int {
 	if m.options.WhetherDisplayTitle {
 		y++
 	}
+	// When status bar is at top, it occupies row 0 like the title bar does,
+	// so menu title row must account for it even though WhetherDisplayTitle is forced false.
+	if m.statusBar != nil && m.options.StatusBarPosition == StatusBarTop {
+		y++
+	}
 	return y
 }
 
@@ -1194,10 +1367,79 @@ func (m *Main) menuItemAt(x, y int) int {
 	}
 
 	idx := m.getPageStartIndex() + row*numCols + col
-	if idx < 0 || idx >= len(m.menuList) {
+	if idx < 0 || idx >= len(m.menuList) || !m.menuItemHasTextAt(x, idx) {
 		return -1
 	}
 	return idx
+}
+
+func (m *Main) menuItemHasTextAt(x, index int) bool {
+	start, end, ok := m.menuItemTextBounds(index)
+	return ok && x >= start && x < end
+}
+
+func (m *Main) menuItemTextBounds(index int) (start, end int, ok bool) {
+	if index < 0 || index >= len(m.menuList) || m.app == nil {
+		return 0, 0, false
+	}
+	if m.options.CenterEverything {
+		return m.centeredMenuItemTextBounds(index)
+	}
+
+	item, _ := m.menuItemView(m.app, index)
+	start, end, ok = visibleTextBounds(item)
+	if !ok {
+		return 0, 0, false
+	}
+
+	start += m.menuStartColumn - 4
+	end += m.menuStartColumn - 4
+	if m.isDualColumn && (index-m.getPageStartIndex())%2 == 1 {
+		_, leftWidth := m.menuItemView(m.app, index-1)
+		start += leftWidth + 4
+		end += leftWidth + 4
+	}
+	return start, end, true
+}
+
+func (m *Main) centeredMenuItemTextBounds(index int) (start, end int, ok bool) {
+	menus := m.getCurPageMenus()
+	titleLengths := make([]int, len(menus))
+	for i, item := range menus {
+		titleLengths[i] = layout.Width(item.OriginString())
+	}
+	entryLength := m.centeredEntryLength(m.app, titleLengths)
+	entry := m.formatEntry(&m.menuList[index], index, entryLength)
+	start, end, ok = visibleTextBounds(entry)
+	if !ok {
+		return 0, 0, false
+	}
+
+	column := (index - m.getPageStartIndex()) % m.getNumColumns()
+	if m.isDualColumn {
+		start += (m.app.WindowWidth()-entryLength*2)/2 + column*entryLength
+		end += (m.app.WindowWidth()-entryLength*2)/2 + column*entryLength
+	} else {
+		start += (m.app.WindowWidth() - entryLength) / 2
+		end += (m.app.WindowWidth() - entryLength) / 2
+	}
+	return start, end, true
+}
+
+func visibleTextBounds(view string) (start, end int, ok bool) {
+	column := 0
+	start = -1
+	for _, r := range ansi.Strip(view) {
+		width := runewidth.RuneWidth(r)
+		if !unicode.IsSpace(r) {
+			if start < 0 {
+				start = column
+			}
+			end = column + width
+		}
+		column += width
+	}
+	return start, end, start >= 0
 }
 
 func (m *Main) isSelected(index int) bool {
@@ -1345,14 +1587,7 @@ func (m *Main) keyMsgHandle(msg tea.KeyMsg, a *App) (Page, tea.Cmd) {
 		if m.selectedIndex < 0 {
 			break
 		}
-		// Check for custom action first; fall through to submenu if none.
-		if actionPage, actionCmd := m.menu.Action(m.app, m.selectedIndex); actionPage != nil || actionCmd != nil {
-			return actionPage, actionCmd
-		}
-		newPage = m.enterMenuWithLoading(nil, nil)
-		if m.pendingEnterMenu != nil {
-			return m, a.RerenderCmd(true)
-		}
+		return m.activateSelectedItemWithLoading(a)
 	case "b", "B", "esc":
 		newPage = m.BackMenu()
 	case "r", "R":
@@ -1483,20 +1718,7 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 				m.selectedIndex = idx
 				m.lastClickTime = time.Time{} // reset
 
-				// Check for custom action first; fall through to submenu if none.
-				if actionPage, actionCmd := m.menu.Action(m.app, m.selectedIndex); actionPage != nil || actionCmd != nil {
-					return actionPage, actionCmd
-				}
-
-				newPage := m.enterMenuWithLoading(nil, nil)
-				if m.pendingEnterMenu != nil {
-					return m, a.RerenderCmd(true)
-				}
-				if newPage != nil {
-					return newPage, nil
-				}
-				// No submenu — stay on current page
-				return m, a.RerenderCmd(true)
+				return m.activateSelectedItemWithLoading(a)
 			}
 
 			// Single click → just focus/select, never enter
@@ -1548,22 +1770,18 @@ func (m *Main) mouseClickHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 		return m, a.RerenderCmd(true)
 
 	case tea.MouseRight:
-		if !m.mouseInMenuArea(mouse.Y) {
-			break
-		}
 		idx := m.menuItemAt(mouse.X, mouse.Y)
 		if idx < 0 || idx >= len(m.menuList) {
-			break
+			idx = -1 // 空白区域
 		}
-		// Fetch context menu items for this menu item
 		items := m.menu.ContextMenuItems(a, idx)
 		if len(items) == 0 {
 			break
 		}
-		// Highlight the right-clicked item
-		m.selectedIndex = idx
-		// Create and show context menu at mouse position
-		contextMenu := NewContextMenu(m.menu, idx, items, mouse.X, mouse.Y)
+		if idx >= 0 {
+			m.selectedIndex = idx
+		}
+		contextMenu := newContextMenu(m.menu, idx, items, mouse.X, mouse.Y, m.options.ContextMenuOptions)
 		a.pushModal(contextMenu)
 		return m, a.RerenderCmd(true)
 
@@ -1879,6 +2097,64 @@ func (m *Main) enterMenuWithLoading(newMenu Menu, newTitle *MenuItem) Page {
 	return nil
 }
 
+// activateSelectedItemWithLoading defers Action until the loading state has rendered.
+// A nil Action result retains the existing fallback to the selected item's submenu.
+func (m *Main) activateSelectedItemWithLoading(a *App) (Page, tea.Cmd) {
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.menuList) {
+		return m, a.Tick(time.Nanosecond)
+	}
+	if m.pendingMenuAction != nil || m.pendingEnterMenu != nil || m.pendingRefreshMenu != nil || m.pendingAction != nil {
+		return m, nil
+	}
+
+	loading := NewLoading(m)
+	loading.Start()
+	m.pendingMenuAction = &menuActionDeferred{
+		menu:    m.menu,
+		index:   m.selectedIndex,
+		item:    m.menuList[m.selectedIndex],
+		loading: loading,
+	}
+	return m, a.RerenderCmd(true)
+}
+
+// DeferWithLoading 在下一次 tick 执行延迟动作，并先显示加载提示。
+//
+// action 的返回值语义：
+//   - (true, nil)：正常完成，结束加载并重绘
+//   - (false, nil)：中途取消或失败，结束加载并重绘
+//   - (false, newPage)：结束加载并跳转到 newPage
+//
+// 如果当前已有其他待执行操作，静默返回 false。
+// 所有状态写入均在 Update 内完成，避免与 View 并发访问。
+func (m *Main) DeferWithLoading(action func(*Main) (bool, Page)) bool {
+	if m.pendingMenuAction != nil || m.pendingEnterMenu != nil || m.pendingRefreshMenu != nil || m.pendingAction != nil {
+		return false
+	}
+
+	loading := NewLoading(m)
+	loading.Start()
+	m.pendingAction = &actionDeferred{
+		action:  action,
+		loading: loading,
+	}
+	return true
+}
+
+// RefreshMenuWithLoading 在下一次 tick 刷新当前菜单，并先显示加载提示。
+// 所有状态写入均在 Update 内完成，避免与 View 并发访问。
+func (m *Main) RefreshMenuWithLoading() {
+	m.DeferWithLoading(func(m *Main) (bool, Page) {
+		if hook := m.menu.BeforeEnterMenuHook(); hook != nil {
+			if res, newPage := hook(m); !res {
+				return false, newPage
+			}
+		}
+		m.menuList = m.menu.MenuViews()
+		return true, nil
+	})
+}
+
 func (m *Main) EnterMenu(newMenu Menu, newTitle *MenuItem) Page {
 	if (newMenu == nil || newTitle == nil) && m.selectedIndex >= len(m.menuList) {
 		return nil
@@ -2056,9 +2332,9 @@ func (m *Main) breadcrumbSegmentAt(x, y int, a *App) (segIdx int, depthIdx int, 
 		return -1, 0, false
 	}
 
-	// Status bar occupies the last rows (DefaultStatusBar is single-row).
-	h := a.WindowHeight()
-	if y < h-1 {
+	// Status bar occupies a specific row based on position.
+	statusBarRow := m.statusBarRowY(a)
+	if statusBarRow < 0 || y != statusBarRow {
 		return -1, 0, false
 	}
 
@@ -2105,7 +2381,14 @@ func (m *Main) isOverClickableElement(x, y int, a *App) bool {
 		return true
 	}
 
-	// 3. Menu list area (single-click selects, double-click enters)
+	// 3. Tab bar (when multi-tab mode enabled)
+	if m.options.EnableTabs && m.tabs != nil {
+		if tabIdx := m.tabIndexAt(x, y, a); tabIdx >= 0 {
+			return true
+		}
+	}
+
+	// 4. Menu list area (single-click selects, double-click enters)
 	if !m.inSearching && m.mouseInMenuArea(y) {
 		idx := m.menuItemAt(x, y)
 		if idx >= 0 && idx < len(m.menuList) {
@@ -2121,6 +2404,7 @@ func (m *Main) isOverClickableElement(x, y int, a *App) bool {
 // hover rendering state and the global pointer cursor.
 func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 	oldBreadcrumbHover := m.hoveredBreadcrumbIdx
+	oldTabHover := m.hoveredTabIdx
 	oldPointerActive := m.hoverPointerActive
 	oldBackButtonHover := m.hoveredBackButton
 
@@ -2132,6 +2416,10 @@ func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 		}
 		if m.hoveredMenuItemIdx != -1 {
 			m.hoveredMenuItemIdx = -1
+			stateChanged = true
+		}
+		if m.hoveredTabIdx != -1 {
+			m.hoveredTabIdx = -1
 			stateChanged = true
 		}
 		if m.hoveredBackButton {
@@ -2156,6 +2444,13 @@ func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 		m.hoveredBreadcrumbIdx = -1
 	}
 
+	// Update tab hover (when multi-tab mode enabled)
+	if m.options.EnableTabs && m.tabs != nil {
+		m.hoveredTabIdx = m.tabIndexAt(mouse.X, mouse.Y, a)
+	} else {
+		m.hoveredTabIdx = -1
+	}
+
 	// Update menu item hover
 	oldMenuItemHover := m.hoveredMenuItemIdx
 	if !m.inSearching && m.mouseInMenuArea(mouse.Y) {
@@ -2177,7 +2472,7 @@ func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 
 	// Compute commands for state changes
 	var cmds []tea.Cmd
-	if m.hoveredBreadcrumbIdx != oldBreadcrumbHover || m.hoveredMenuItemIdx != oldMenuItemHover || m.hoveredBackButton != oldBackButtonHover {
+	if m.hoveredBreadcrumbIdx != oldBreadcrumbHover || m.hoveredMenuItemIdx != oldMenuItemHover || m.hoveredBackButton != oldBackButtonHover || m.hoveredTabIdx != oldTabHover {
 		cmds = append(cmds, a.RerenderCmd(true))
 	}
 	if m.hoverPointerActive != oldPointerActive {
@@ -2197,6 +2492,34 @@ func (m *Main) mouseMotionHandle(mouse tea.Mouse, a *App) (Page, tea.Cmd) {
 // handleBreadcrumbClick handles a left-click on the status bar breadcrumb.
 // Navigates back to the clicked menu level. Returns nil if no clickable
 // breadcrumb segment was hit.
+// UpdateBreadcrumbHover updates the breadcrumb hover state based on the given
+// screen position and returns whether the hovered segment changed (so the
+// caller should re-render) and whether the position is over a clickable
+// breadcrumb segment (so the caller should show a pointer cursor).
+//
+// This is exported for custom pages (search/login/QR) that render the top
+// status bar via pageTitleView but handle their own mouse events instead of
+// going through Main.MouseMsgHandle. Callers must only invoke this when the
+// top status bar is actually rendered on their page.
+func (m *Main) UpdateBreadcrumbHover(x, y int, a *App) (changed bool, over bool) {
+	old := m.hoveredBreadcrumbIdx
+	segIdx, _, ok := m.breadcrumbSegmentAt(x, y, a)
+	if ok {
+		m.hoveredBreadcrumbIdx = segIdx
+	} else {
+		m.hoveredBreadcrumbIdx = -1
+	}
+	return m.hoveredBreadcrumbIdx != old, ok
+}
+
+// HandleBreadcrumbClick is the exported entry point for custom pages to
+// delegate a breadcrumb left-click to Main. Returns the target page (Main
+// navigated back to the clicked level) or nil when no clickable segment was
+// hit.
+func (m *Main) HandleBreadcrumbClick(x, y int, a *App) Page {
+	return m.handleBreadcrumbClick(x, y, a)
+}
+
 func (m *Main) handleBreadcrumbClick(x, y int, a *App) Page {
 	_, depthIdx, ok := m.breadcrumbSegmentAt(x, y, a)
 	if !ok {

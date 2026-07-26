@@ -17,11 +17,19 @@ type TabConfig struct {
 	OnActivate func(m *Main, prevTabIndex int) bool // Called when tab becomes active. Return false to veto the switch.
 }
 
+// ContextMenuOptions configures the size limits of right-click context menus.
+// MaxWidth and MaxHeight include the border; zero leaves that dimension unlimited.
+type ContextMenuOptions struct {
+	MaxWidth  int
+	MaxHeight int
+}
+
 type Options struct {
 	StartupOptions
 	ProgressOptions
 	NotificationOptions
 
+	ContextMenuOptions  ContextMenuOptions
 	AppName             string
 	WhetherDisplayTitle bool
 	LoadingText         string
@@ -37,13 +45,14 @@ type Options struct {
 
 	TeaOptions []tea.ProgramOption // Tea program options
 
-	InitPage        InitPage
-	MainMenuTitle   *MenuItem
-	Ticker          Ticker          // Ticker for render
-	MainMenu        Menu            // Entry menu when EnableTabs is false. When EnableTabs is true, TabConfigs[0].Menu becomes the entry menu and this field is ignored.
-	LocalSearchMenu LocalSearchMenu // Local search result menu
-	Components      []Component     // Custom Extra components
-	StatusBar       StatusBar       // Custom status bar, nil = no status bar
+	InitPage          InitPage
+	MainMenuTitle     *MenuItem
+	Ticker            Ticker            // Ticker for render
+	MainMenu          Menu              // Entry menu when EnableTabs is false. When EnableTabs is true, TabConfigs[0].Menu becomes the entry menu and this field is ignored.
+	LocalSearchMenu   LocalSearchMenu   // Local search result menu
+	Components        []Component       // Custom Extra components
+	StatusBar         StatusBar         // Custom status bar, nil = no status bar
+	StatusBarPosition StatusBarPosition // Position of status bar: StatusBarBottom (default) or StatusBarTop
 
 	// EnableTabs activates multi-tab navigation in the Main page. When true,
 	// TabConfigs defines the available tabs; when false (default), MainMenu and
@@ -73,9 +82,9 @@ type StartupOptions struct {
 	ProgressOutBounce bool
 	Welcome           string
 
-	// Animation selects the startup visual. The default Sequence combines
-	// typewriter, fade, rainbow sweep, glitch, spinner, and staged status text.
-	// See the StartupAnimation constants for all available effects.
+	// Animation selects the startup visual. The default Sequence combines fade,
+	// rainbow sweep, glitch, spinner, and staged status text. See the
+	// StartupAnimation constants for all available effects.
 	Animation StartupAnimation
 	// ReducedMotion renders a static, readable final frame. It is useful for
 	// accessibility, automated environments, and slow remote terminals.
@@ -120,7 +129,12 @@ func DefaultOptions() *Options {
 			MaxLines:       5,
 			Gap:            1,
 		},
+		ContextMenuOptions: ContextMenuOptions{
+			MaxWidth:  0,
+			MaxHeight: 0,
+		},
 		WhetherDisplayTitle: true,
+		StatusBarPosition:   StatusBarBottom,
 		DualColumn:          true,
 		DynamicRowCount:     false,
 		MaxMenuStartRow:     0,
@@ -172,5 +186,12 @@ func WithThemePair(dark, light style.Theme) WithOption {
 func WithNotificationOptions(opts NotificationOptions) WithOption {
 	return func(o *Options) {
 		o.NotificationOptions = opts
+	}
+}
+
+// WithContextMenuOptions overrides the right-click context menu configuration.
+func WithContextMenuOptions(opts ContextMenuOptions) WithOption {
+	return func(o *Options) {
+		o.ContextMenuOptions = opts
 	}
 }

@@ -24,16 +24,13 @@ type StartupAnimation string
 
 const (
 	// StartupAnimationSequence is the default game/IDE-like boot sequence. It
-	// combines typewriter, fade, rainbow sweep, a short glitch transition, and
-	// staged status text.
+	// combines fade, rainbow sweep, a short glitch transition, and staged status text.
 	StartupAnimationSequence StartupAnimation = "sequence"
 	// StartupAnimationFadeIn reveals the logo with a terminal-friendly dithered
 	// opacity approximation and a dim-to-bright color ramp.
 	StartupAnimationFadeIn StartupAnimation = "fade-in"
 	// StartupAnimationRainbowWave moves a rainbow hue wave through the logo.
 	StartupAnimationRainbowWave StartupAnimation = "rainbow-wave"
-	// StartupAnimationTypewriter reveals logo cells one at a time.
-	StartupAnimationTypewriter StartupAnimation = "typewriter"
 	// StartupAnimationSpinner displays the logo with a custom animated spinner.
 	StartupAnimationSpinner StartupAnimation = "spinner"
 	// StartupAnimationSlideIn slides the logo in from the right with an elastic
@@ -61,7 +58,6 @@ const (
 	logoStatic startupLogoEffect = iota
 	logoFade
 	logoRainbow
-	logoTypewriter
 	logoGlitch
 )
 
@@ -109,8 +105,6 @@ func (s *StartupPage) logoEffect() (startupLogoEffect, float64, bool) {
 		return logoFade, p, false
 	case StartupAnimationRainbowWave:
 		return logoRainbow, p, false
-	case StartupAnimationTypewriter:
-		return logoTypewriter, p, false
 	case StartupAnimationGlitch:
 		return logoGlitch, p, false
 	case StartupAnimationSlideIn:
@@ -120,17 +114,15 @@ func (s *StartupPage) logoEffect() (startupLogoEffect, float64, bool) {
 	case StartupAnimationMatrixRain, StartupAnimationParticleBurst:
 		return logoFade, min(1, p*1.8), false
 	case StartupAnimationSequence, "":
-		// A short staged boot: letters arrive, color fades in, then a final
-		// chromatic sweep and a brief glitch hand-off to the main page.
+		// A short staged boot: color fades in, then a chromatic sweep and a
+		// brief glitch hand-off to the main page.
 		switch {
-		case p < .26:
-			return logoTypewriter, p / .26, false
-		case p < .56:
-			return logoFade, (p - .26) / .30, false
-		case p < .86:
-			return logoRainbow, (p - .56) / .30, false
+		case p < .38:
+			return logoFade, p / .38, false
+		case p < .82:
+			return logoRainbow, (p - .38) / .44, false
 		case p < .94:
-			return logoGlitch, (p - .86) / .08, false
+			return logoGlitch, (p - .82) / .12, false
 		default:
 			return logoStatic, 1, false
 		}
@@ -142,13 +134,6 @@ func (s *StartupPage) logoEffect() (startupLogoEffect, float64, bool) {
 func (s *StartupPage) animatedLogoView(a *App) string {
 	logo := s.startupLogoSource(a)
 	effect, progress, slide := s.logoEffect()
-	if effect == logoTypewriter {
-		// Reveal each welcome character in order, but reveal the current block
-		// letter column by column. The complete logo remains the canvas, so its
-		// center position is stable while the letter grows left-to-right.
-		rendered := renderStartupTypewriterLogo(logo, s.options.Welcome, progress, s.animationFrame())
-		return s.positionAnimatedLogo(a, rendered, slide, progress)
-	}
 	rendered := renderStartupLogo(logo, effect, progress, s.animationFrame())
 	return s.positionAnimatedLogo(a, rendered, slide, progress)
 }
@@ -169,66 +154,6 @@ func (s *StartupPage) positionAnimatedLogo(a *App, rendered string, slide bool, 
 		Align(lipgloss.Center).
 		Width(a.WindowWidth()).
 		Render(rendered)
-}
-
-// renderStartupTypewriterLogo exposes the next welcome character one column at
-// a time. It masks the full logo instead of rendering a shorter prefix, which
-// prevents the centered logo from shifting as each character is typed.
-func renderStartupTypewriterLogo(logo, welcome string, progress float64, frame int) string {
-	return renderStartupLogo(maskStartupLogoColumns(logo, typewriterRevealWidth(logo, welcome, progress)), logoStatic, 1, frame)
-}
-
-func typewriterRevealWidth(logo, welcome string, progress float64) int {
-	runes := []rune(welcome)
-	if len(runes) == 0 {
-		return layout.Width(logo)
-	}
-
-	position := min(1, max(0, progress)) * float64(len(runes))
-	complete := min(len(runes), int(math.Floor(position)))
-	fraction := position - float64(complete)
-	if complete == len(runes) {
-		return layout.Width(logo)
-	}
-
-	prefixWidth := startupTextWidth(string(runes[:complete]), welcome, logo)
-	nextWidth := startupTextWidth(string(runes[:complete+1]), welcome, logo)
-	return prefixWidth + int(math.Round(float64(nextWidth-prefixWidth)*fraction))
-}
-
-func startupTextWidth(prefix, welcome, logo string) int {
-	fullBlock := util.GetAlphaAscii(welcome)
-	if strings.TrimSpace(fullBlock) != "" && logo == fullBlock {
-		return layout.Width(util.GetAlphaAscii(prefix))
-	}
-	return layout.Width(prefix)
-}
-
-func maskStartupLogoColumns(logo string, columns int) string {
-	if columns <= 0 {
-		return strings.Map(func(r rune) rune {
-			if r == '\n' {
-				return r
-			}
-			return ' '
-		}, logo)
-	}
-
-	var b strings.Builder
-	for _, line := range strings.Split(logo, "\n") {
-		position := 0
-		for _, r := range line {
-			width := lipgloss.Width(string(r))
-			if position+width <= columns {
-				b.WriteRune(r)
-			} else {
-				b.WriteString(strings.Repeat(" ", max(1, width)))
-			}
-			position += width
-		}
-		b.WriteByte('\n')
-	}
-	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func renderStartupLogo(logo string, effect startupLogoEffect, progress float64, frame int) string {

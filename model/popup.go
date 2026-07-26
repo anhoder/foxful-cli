@@ -622,19 +622,42 @@ func embedTitleInTopBorder(framed, title string, styles style.PopupStyleSet) str
 		return framed
 	}
 
+	// Truncate by display width, not rune count: CJK glyphs occupy two columns,
+	// so a rune-count budget would let a wide title overrun the top border.
 	displayTitle := titleRunes
-	if len(displayTitle) > availableWidth {
-		displayTitle = append(displayTitle[:availableWidth-1], '…')
+	titleWidth := ansi.StringWidth(string(displayTitle))
+	if titleWidth > availableWidth {
+		truncated := make([]rune, 0, len(displayTitle))
+		used := 0
+		for _, r := range displayTitle {
+			rw := ansi.StringWidth(string(r))
+			if used+rw > availableWidth-1 { // reserve 1 column for the ellipsis
+				break
+			}
+			truncated = append(truncated, r)
+			used += rw
+		}
+		displayTitle = append(truncated, '…')
+		titleWidth = used + 1
 	}
 
-	titleStart := (frameWidth - len(displayTitle)) / 2
+	// Center by display width and advance x by each rune's display width so wide
+	// glyphs land on their own two columns (Line.Set fills the placeholder cell).
+	// Setting Width per rune keeps the top border exactly frameWidth columns wide;
+	// hardcoding Width:1 previously pushed the top-right corner out by the sum of
+	// the title's extra CJK columns, producing a detached corner / right-edge ghost.
+	titleStart := (frameWidth - titleWidth) / 2
 	titleStyle := styles.Title.GetForeground()
-	for i, r := range displayTitle {
-		x := titleStart + i
-		if x >= 1 && x < frameWidth-1 {
+	x := titleStart
+	for _, r := range displayTitle {
+		rw := ansi.StringWidth(string(r))
+		if rw < 1 {
+			rw = 1
+		}
+		if x >= 1 && x+rw <= frameWidth-1 {
 			cell := &uv.Cell{
 				Content: string(r),
-				Width:   1,
+				Width:   rw,
 				Style: uv.Style{
 					Fg: titleStyle,
 					Bg: styles.Surface,
@@ -642,6 +665,7 @@ func embedTitleInTopBorder(framed, title string, styles style.PopupStyleSet) str
 			}
 			screen.Lines[0].Set(x, cell)
 		}
+		x += rw
 	}
 
 	return screen.Render()

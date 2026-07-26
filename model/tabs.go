@@ -15,6 +15,7 @@ import (
 type Tabs struct {
 	titles      []string
 	active      int
+	hoveredIdx  int
 	focused     bool
 	width       int
 	height      int
@@ -30,6 +31,7 @@ func NewTabs(titles []string) *Tabs {
 	return &Tabs{
 		titles:      titles,
 		active:      0,
+		hoveredIdx:  -1,
 		width:       80,
 		height:      1,
 		showBorder:  true,
@@ -93,6 +95,11 @@ func (t *Tabs) SetActive(index int) {
 	t.active = clampInt(index, 0, len(t.titles)-1)
 }
 
+// SetHovered sets the hovered tab index (-1 for none).
+func (t *Tabs) SetHovered(index int) {
+	t.hoveredIdx = index
+}
+
 // Next moves to the next tab, wrapping to the first tab after the last.
 func (t *Tabs) Next() {
 	if len(t.titles) == 0 {
@@ -152,7 +159,7 @@ func (t *Tabs) View() string {
 	ss := style.CurrentStyleSet()
 
 	// Render tab bar with per-tab borders
-	tabBar := t.renderTabBar(ss)
+	tabBar := t.renderTabBar(ss, t.hoveredIdx)
 
 	// If no content, return just the tab bar
 	if t.content == "" {
@@ -165,7 +172,7 @@ func (t *Tabs) View() string {
 
 // renderTabBar renders tabs as individual bordered boxes.
 // The active tab has a notch cut in its bottom border to connect to content below.
-func (t *Tabs) renderTabBar(ss style.StyleSet) string {
+func (t *Tabs) renderTabBar(ss style.StyleSet, hoveredIdx int) string {
 	if !t.showBorder {
 		// Simple rendering without borders
 		var parts []string
@@ -204,32 +211,35 @@ func (t *Tabs) renderTabBar(ss style.StyleSet) string {
 		BottomRight: "┴",
 	}
 
-	// Get border color based on focus state
-	borderColor := t.getBorderColor(ss)
+	// 只有获得键盘焦点的活动 Tab 使用主色边框；其他边框不指定颜色。
+	inactiveBorderColor := color.Color(lipgloss.NoColor{})
+	activeBorderColor := inactiveBorderColor
+	if t.focused {
+		activeBorderColor = ss.SelectedItem.GetForeground()
+	}
 
-	// Base tab style (for inactive tabs)
 	tab := lipgloss.NewStyle().
 		Border(tabBorder, true).
-		BorderForeground(borderColor).
+		BorderForeground(inactiveBorderColor).
 		Padding(0, 1)
 
-	// Active tab style (with notch)
 	activeTab := lipgloss.NewStyle().
 		Border(activeTabBorder, true).
-		BorderForeground(borderColor).
+		BorderForeground(activeBorderColor).
 		Padding(0, 1)
 
 	// Render each tab
 	var renderedTabs []string
 	for i, title := range t.titles {
-		var tabContent string
+		titleStyle := ss.MenuItem
+		if (i == t.active && t.focused) || i == hoveredIdx {
+			// 聚焦和 hover 仅使用主色前景，避免 SelectedItem 的背景色。
+			titleStyle = lipgloss.NewStyle().Foreground(ss.SelectedItem.GetForeground())
+		}
+		tabContent := titleStyle.Render(title)
 		if i == t.active {
-			// Active tab: use highlight color for text
-			tabContent = ss.SelectedItem.Render(title)
 			renderedTabs = append(renderedTabs, activeTab.Render(tabContent))
 		} else {
-			// Inactive tab: use default menu item style
-			tabContent = ss.MenuItem.Render(title)
 			renderedTabs = append(renderedTabs, tab.Render(tabContent))
 		}
 	}
@@ -240,12 +250,17 @@ func (t *Tabs) renderTabBar(ss style.StyleSet) string {
 	// Create gap filler to extend the bottom bar across remaining width
 	rowWidth := lipgloss.Width(row)
 	gapWidth := max(0, t.width-rowWidth-2)
+	gapBorderColor := inactiveBorderColor
+	if t.focused && t.active == len(t.titles)-1 {
+		// 最右侧 Tab 聚焦时，高亮延伸到第三行最右边界。
+		gapBorderColor = activeBorderColor
+	}
 
 	if gapWidth > 0 {
 		// Gap extends the bottom border line
 		tabGap := lipgloss.NewStyle().
 			Border(tabBorder, true).
-			BorderForeground(borderColor).
+			BorderForeground(gapBorderColor).
 			BorderTop(false).
 			BorderLeft(false).
 			BorderRight(false)

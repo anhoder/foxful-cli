@@ -19,16 +19,36 @@ const (
 // NotificationID uniquely identifies an active notification.
 type NotificationID uint64
 
+// NotificationAction is an explicit action rendered in a notification's action area.
+// ID and Label must be non-empty; Label must be plain, single-line text.
+type NotificationAction struct {
+	ID    string
+	Label string
+}
+
+// NotificationActionResult identifies the notification action selected by the user.
+type NotificationActionResult struct {
+	NotificationID NotificationID
+	ActionID       string
+}
+
 // NotificationSpec defines the content and behavior of a notification.
-// Message may contain ANSI-styled text. Title is optional plain single-line text.
-// Timeout of 0 means the notification must be dismissed manually (default for
-// Warning/Error). For Info/Success, a zero Timeout falls back to the app's
-// configured default timeout.
+// Message may contain ANSI-styled text. Title and action labels are plain,
+// single-line text. Timeout of 0 uses the configured default for Info/Success,
+// except notifications with actions remain visible for user interaction.
+// Warning/Error notifications with a zero Timeout also remain visible.
 type NotificationSpec struct {
-	Level   NotificationLevel
-	Title   string
-	Message string
-	Timeout time.Duration
+	Level    NotificationLevel
+	Title    string
+	Message  string
+	Timeout  time.Duration
+	Actions  []NotificationAction
+	OnAction func(NotificationActionResult)
+}
+
+func cloneNotificationSpec(spec NotificationSpec) NotificationSpec {
+	spec.Actions = append([]NotificationAction(nil), spec.Actions...)
+	return spec
 }
 
 // notificationRect is the screen-absolute bounding box of a rendered notification.
@@ -47,6 +67,10 @@ type Notification struct {
 	createdAt time.Time
 	expireAt  time.Time // zero means no auto-expire
 
+	hoveredAction int
+	actionBounds  []notificationRect
+	actionArea    notificationRect
+
 	bounds    notificationRect
 	boundsSet bool
 
@@ -61,18 +85,36 @@ type Notification struct {
 	titleText    string // raw title text (icon + title) for clipboard copy
 }
 
-func (n *Notification) setBounds(x, y, w, h int) {
-	n.bounds = notificationRect{x: x, y: y, w: w, h: h}
-	n.boundsSet = true
+func (n *Notification) clearBounds() {
+	n.bounds = notificationRect{}
+	n.boundsSet = false
+	n.actionBounds = nil
+	n.actionArea = notificationRect{}
 }
 
-func (n *Notification) setContentGeometry(bodyLines []string, cw, th int, titleText string) {
-	// Include title as the first content line so selection works across title + body.
-	if titleText != "" && th > 0 {
-		n.contentLines = append([]string{titleText}, bodyLines...)
-	} else {
-		n.contentLines = bodyLines
+func (n *Notification) setBounds(x, y, w, h int, actionBounds []notificationRect, actionArea notificationRect) {
+	n.bounds = notificationRect{x: x, y: y, w: w, h: h}
+	n.boundsSet = true
+	n.actionBounds = make([]notificationRect, len(actionBounds))
+	for i, bound := range actionBounds {
+		n.actionBounds[i] = notificationRect{x: x + bound.x, y: y + bound.y, w: bound.w, h: bound.h}
 	}
+	if actionArea.w > 0 && actionArea.h > 0 {
+		n.actionArea = notificationRect{x: x + actionArea.x, y: y + actionArea.y, w: actionArea.w, h: actionArea.h}
+	} else {
+		n.actionArea = notificationRect{}
+	}
+}
+
+func (n *Notification) resetInteraction() {
+	n.clearSelection()
+	n.contentLines = nil
+	n.hoveredAction = -1
+	n.clearBounds()
+}
+
+func (n *Notification) setContentGeometry(contentLines []string, cw, th int, titleText string) {
+	n.contentLines = append(n.contentLines[:0], contentLines...)
 	n.contentWidth = cw
 	n.titleHeight = th
 	n.titleText = titleText
@@ -128,56 +170,94 @@ func (n *Notification) contentCoordAt(x, y int) (int, int) {
 	return row, col
 }
 
+func (n *Notification) actionAt(x, y int) int {
+	for i, bound := range n.actionBounds {
+		if bound.contains(x, y) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (n *Notification) pointInActionArea(x, y int) bool {
+	return n.actionArea.w > 0 && n.actionArea.h > 0 && n.actionArea.contains(x, y)
+}
+
+type notificationMouseResult struct {
+	consumed bool
+	dismiss  bool
+	rerender bool
+	action   *NotificationActionResult
+	cmd      tea.Cmd
+}
+
 // handleMouse processes mouse events for the notification.
-// Returns: (consumed, shouldDismiss, cmd).
-// consumed=true means the notification handled the event (don't pass to modals/page).
-// shouldDismiss=true means the notification should be removed.
-func (n *Notification) handleMouse(msg tea.MouseMsg) (bool, bool, tea.Cmd) {
+func (n *Notification) handleMouse(msg tea.MouseMsg) notificationMouseResult {
 	mouse := msg.Mouse()
 	switch msg.(type) {
 	case tea.MouseClickMsg:
-		// Click on close button → dismiss
 		if n.pointInCloseButton(mouse.X, mouse.Y) {
-			return true, true, nil
+			return notificationMouseResult{consumed: true, dismiss: true}
 		}
-		// Click on content (title or body) → start text selection
+		if mouse.Button == tea.MouseLeft {
+			if actionIndex := n.actionAt(mouse.X, mouse.Y); actionIndex >= 0 {
+				n.clearSelection()
+				n.hoveredAction = actionIndex
+				action := n.spec.Actions[actionIndex]
+				return notificationMouseResult{
+					consumed: true,
+					dismiss:  true,
+					rerender: true,
+					action: &NotificationActionResult{
+						NotificationID: n.id,
+						ActionID:       action.ID,
+					},
+				}
+			}
+		}
+		if n.pointInActionArea(mouse.X, mouse.Y) {
+			return notificationMouseResult{consumed: true}
+		}
 		if n.pointInContent(mouse.X, mouse.Y) {
 			line, col := n.contentCoordAt(mouse.X, mouse.Y)
+			n.hoveredAction = -1
 			n.selecting = true
 			n.hasSelection = true
 			n.selAnchorLine = line
 			n.selAnchorCol = col
 			n.selCursorLine = line
 			n.selCursorCol = col
-			return true, false, nil
+			return notificationMouseResult{consumed: true}
 		}
-		// Click on frame border (not title, not content) → dismiss
-		return true, true, nil
+		return notificationMouseResult{consumed: true, dismiss: true}
 
 	case tea.MouseMotionMsg:
-		// Update selection if actively dragging
 		if n.selecting {
 			line, col := n.contentCoordAt(mouse.X, mouse.Y)
 			n.selCursorLine = line
 			n.selCursorCol = col
-			return true, false, nil
+			return notificationMouseResult{consumed: true}
 		}
-		// Cursor hint: pointer on close button, I-beam on selectable content
-		if n.pointInCloseButton(mouse.X, mouse.Y) {
-			return true, false, setMousePointer("pointer")
+		previousHovered := n.hoveredAction
+		n.hoveredAction = n.actionAt(mouse.X, mouse.Y)
+		result := notificationMouseResult{consumed: true, rerender: previousHovered != n.hoveredAction}
+		switch {
+		case n.hoveredAction >= 0, n.pointInCloseButton(mouse.X, mouse.Y):
+			result.cmd = setMousePointer("pointer")
+		case n.pointInContent(mouse.X, mouse.Y):
+			result.cmd = setMousePointer("text")
+		default:
+			result.cmd = setMousePointer("default")
 		}
-		if n.pointInContent(mouse.X, mouse.Y) {
-			return true, false, setMousePointer("text")
-		}
-		return true, false, setMousePointer("default")
+		return result
 
 	case tea.MouseReleaseMsg:
 		if n.selecting {
 			n.selecting = false
-			return true, false, n.finalizeSelection()
+			return notificationMouseResult{consumed: true, cmd: n.finalizeSelection()}
 		}
 	}
-	return false, false, nil
+	return notificationMouseResult{}
 }
 
 func (n *Notification) applySelectionHighlight(visibleLines []string, width int) []string {

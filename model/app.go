@@ -39,6 +39,13 @@ type App struct {
 
 	listeningKBEventL    sync.Mutex
 	listeningMouseEventL sync.Mutex
+
+	// pageMu 保护 page 字段。page 只可由主事件循环 goroutine（App.Update
+	// 与 App.Run 启动阶段）写入，命令或 ticker goroutine 不得写入。写入必须
+	// 使用 setPage（Lock），并发读取（Rerender、RerenderCmd、Tick、CurPage）
+	// 必须使用 getPage（RLock）。主循环读取可直接访问 page，因为它们与唯一
+	// 写入者串行；从 goroutine 写入 page 前必须重新检查所有直接读取点。
+	pageMu sync.RWMutex
 }
 
 // StyleSet returns the app-scoped StyleSet if one was set via SetStyleSet,
@@ -161,7 +168,13 @@ func resetMousePointer() {
 	writeMousePointer("")
 }
 
-func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (a *App) Update(msg tea.Msg) (model tea.Model, returnCmd tea.Cmd) {
+	var notificationHoverCmd tea.Cmd
+	defer func() {
+		if notificationHoverCmd != nil {
+			returnCmd = tea.Batch(notificationHoverCmd, returnCmd)
+		}
+	}()
 	if _, ok := msg.(tea.KeyMsg); ok {
 		if !a.listeningKBEventL.TryLock() {
 			return a, nil
@@ -231,26 +244,42 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.RerenderCmd(true)
 	}
 
-	// Notification mouse handling — checked before modal/page routing.
-	// Notifications intercept mouse events on their bounds: clicks on title
-	// dismiss, clicks on content handle text selection, motion/release extend
-	// and finalize the selection.
+	// Notification mouse handling is checked before modal/page routing. Events
+	// inside a notification are consumed; leaving an action clears its hover
+	// state while allowing the event to continue to the modal or page.
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		if notif := a.notificationAt(mouseMsg.Mouse()); notif != nil {
-			consumed, dismiss, notifCmd := notif.handleMouse(mouseMsg)
-			if consumed {
+			result := notif.handleMouse(mouseMsg)
+			if result.consumed {
 				var cmds []tea.Cmd
-				if dismiss {
+				onAction := notif.spec.OnAction
+				if result.dismiss {
 					a.removeNotification(notif.id)
+				}
+				if result.dismiss || result.rerender {
 					cmds = append(cmds, a.RerenderCmd(true))
 				}
-				if notifCmd != nil {
-					cmds = append(cmds, notifCmd)
+				if result.cmd != nil {
+					cmds = append(cmds, result.cmd)
+				}
+				if result.action != nil && onAction != nil {
+					onAction(*result.action)
 				}
 				if len(cmds) > 0 {
 					return a, tea.Batch(cmds...)
 				}
 				return a, nil
+			}
+		} else if _, isMotion := mouseMsg.(tea.MouseMotionMsg); isMotion {
+			hoverChanged := false
+			for _, notification := range a.notifications {
+				if notification.hoveredAction >= 0 {
+					notification.hoveredAction = -1
+					hoverChanged = true
+				}
+			}
+			if hoverChanged {
+				notificationHoverCmd = a.RerenderCmd(true)
 			}
 		}
 	}
@@ -264,7 +293,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if top.dismissed() {
 				page, cmd := a.completeTopModal()
 				if page != nil {
-					a.page = page
+					a.setPage(page)
 				}
 				cmds := []tea.Cmd{a.RerenderCmd(true)}
 				if cmd != nil {
@@ -279,7 +308,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if top.dismissed() {
 					page, actionCmd := a.completeTopModal()
 					if page != nil {
-						a.page = page
+						a.setPage(page)
 					}
 					cmds := []tea.Cmd{a.RerenderCmd(true)}
 					if mouseCmd != nil {
@@ -315,7 +344,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				page, cmd := a.completeTopModal()
 				if page != nil {
-					a.page = page
+					a.setPage(page)
 				}
 				cmds := []tea.Cmd{a.RerenderCmd(true)}
 				if cmd != nil {
@@ -328,12 +357,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					top.dismissOutside()
 					page, modalCmd := a.completeTopModal()
 					if page != nil {
-						a.page = page
+						a.setPage(page)
 					}
 					// Forward the right-click to the page
 					newPage, pageCmd := a.page.Update(msg, a)
 					if newPage != nil {
-						a.page = newPage
+						a.setPage(newPage)
 					}
 					cmds := []tea.Cmd{a.RerenderCmd(true)}
 					if modalCmd != nil {
@@ -353,7 +382,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	page, cmd := a.page.Update(msg, a)
 	if page != nil {
-		a.page = page
+		a.setPage(page)
 	}
 	return a, cmd
 }
@@ -456,15 +485,14 @@ func (a *App) Run() error {
 				a.options.InitPage = a.startup
 			}
 		}
-		a.page = a.options.InitPage
+		a.setPage(a.options.InitPage)
 	}
 
 	if len(a.options.GlobalKeyHandlers) > 0 {
 		ListenGlobalKeys(a, a.options.GlobalKeyHandlers)
 	}
 
-	// a.options.TeaOptions = append(a.options.TeaOptions, tea.WithHardTabs(false), tea.WithFoxfulRenderer())
-	// TODO: These APIs are not available in the current bubbletea version
+	a.options.TeaOptions = append(a.options.TeaOptions, tea.WithHardTabs(false), tea.WithFoxfulRenderer())
 	a.program = tea.NewProgram(a, a.options.TeaOptions...)
 	_, err := a.program.Run()
 	return err
@@ -481,8 +509,8 @@ func (a *App) Rerender(cleanScreen bool) {
 		if cleanScreen {
 			a.program.Send(tea.ClearScreen())
 		}
-		if a.page != nil {
-			a.program.Send(a.page.Msg())
+		if p := a.getPage(); p != nil {
+			a.program.Send(p.Msg())
 		}
 	}()
 }
@@ -492,19 +520,21 @@ func (a *App) RerenderCmd(cleanScreen bool) tea.Cmd {
 		if cleanScreen {
 			a.program.Send(tea.ClearScreen())
 		}
-		if a.page == nil {
+		p := a.getPage()
+		if p == nil {
 			return nil
 		}
-		return a.page.Msg()
+		return p.Msg()
 	}
 }
 
 func (a *App) Tick(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg {
-		if a.page == nil {
+		p := a.getPage()
+		if p == nil {
 			return nil
 		}
-		return a.page.Msg()
+		return p.Msg()
 	})
 }
 
@@ -517,7 +547,22 @@ func (a *App) WindowHeight() int {
 }
 
 func (a *App) CurPage() Page {
+	return a.getPage()
+}
+
+// getPage 在读锁保护下返回当前页面，可从任意 goroutine 调用。
+// 调用者必须在本方法返回后再调用页面方法（例如 Msg），不可持锁调用。
+func (a *App) getPage() Page {
+	a.pageMu.RLock()
+	defer a.pageMu.RUnlock()
 	return a.page
+}
+
+// setPage 在写锁保护下存储当前页面，只可由主事件循环 goroutine 调用。
+func (a *App) setPage(p Page) {
+	a.pageMu.Lock()
+	a.page = p
+	a.pageMu.Unlock()
 }
 
 func (a *App) Startup() *StartupPage {
@@ -642,10 +687,10 @@ func (a *App) compositeModals(baseContent string) string {
 
 // ---- Notification API ----
 
-// Notify displays a notification and returns its ID. For Info/Success levels,
-// the notification auto-dismisses after the configured timeout unless spec.Timeout
-// is explicitly set. For Warning/Error levels, the notification persists until
-// dismissed manually or replaced by newer notifications beyond the screen limit.
+// Notify displays a notification and returns its ID. Interactive notifications
+// with actions and a zero Timeout remain visible for user interaction. Other
+// Info/Success notifications use the configured default timeout; Warning/Error
+// notifications persist until dismissed manually.
 //
 // Safe to call from goroutines, including during Init(); internally sends a
 // message to the Update loop via a non-blocking goroutine to avoid deadlocks
@@ -654,6 +699,7 @@ func (a *App) Notify(spec NotificationSpec) NotificationID {
 	if a.program == nil {
 		return 0
 	}
+	spec = cloneNotificationSpec(spec)
 	// Assign ID optimistically for return (actual assignment happens in Update).
 	// This is a heuristic; for guaranteed ID tracking, use the returned ID.
 	nextID := a.nextNotificationID + 1
@@ -669,6 +715,7 @@ func (a *App) UpdateNotification(id NotificationID, spec NotificationSpec) {
 	if a.program == nil {
 		return
 	}
+	spec = cloneNotificationSpec(spec)
 	go a.program.Send(updateNotificationMsg{id: id, spec: spec})
 }
 
@@ -697,20 +744,22 @@ func (a *App) ClearAllNotifications() {
 func (a *App) handleShowNotification(spec NotificationSpec) tea.Cmd {
 	a.nextNotificationID++
 	id := a.nextNotificationID
+	spec = cloneNotificationSpec(spec)
 
 	notif := &Notification{
-		id:        id,
-		spec:      spec,
-		createdAt: time.Now(),
+		id:            id,
+		spec:          spec,
+		createdAt:     time.Now(),
+		hoveredAction: -1,
 	}
 	a.notifications = append(a.notifications, notif)
 
 	cmds := []tea.Cmd{a.RerenderCmd(true)}
 
-	// Determine timeout: explicit spec.Timeout takes precedence; otherwise
-	// Info/Success default to configured timeout, Warning/Error persist.
+	// Interactive notifications remain visible when no timeout is explicit.
+	// Otherwise Info/Success use the configured default and Warning/Error persist.
 	timeout := spec.Timeout
-	if timeout == 0 {
+	if timeout == 0 && len(spec.Actions) == 0 {
 		if spec.Level == NotificationInfo || spec.Level == NotificationSuccess {
 			timeout = a.options.NotificationOptions.DefaultTimeout
 			if timeout == 0 {
@@ -759,7 +808,8 @@ func (a *App) handleExpire(id NotificationID) {
 func (a *App) updateNotificationContent(id NotificationID, spec NotificationSpec) tea.Cmd {
 	for _, n := range a.notifications {
 		if n.id == id {
-			n.spec = spec
+			n.spec = cloneNotificationSpec(spec)
+			n.resetInteraction()
 			// Update expiration: 0 means no timeout for updates.
 			if spec.Timeout > 0 {
 				n.expireAt = time.Now().Add(spec.Timeout)
@@ -789,7 +839,7 @@ func (a *App) notificationAt(mouse tea.Mouse) *Notification {
 // compositeNotifications overlays all active notifications on top of the base content.
 func (a *App) compositeNotifications(baseContent string) string {
 	w, h := a.WindowWidth(), a.WindowHeight()
-	ss := style.CurrentStyleSet()
+	ss := a.StyleSet()
 	opts := a.options.NotificationOptions
 
 	// Calculate effective max width (0 = min(termWidth/3, 60)).
@@ -805,34 +855,115 @@ func (a *App) compositeNotifications(baseContent string) string {
 
 	layers := []*layout.Layer{layout.NewLayer(baseContent)}
 	currentHeight := 0
+	for _, n := range a.notifications {
+		n.clearBounds()
+	}
 
 	// Render from newest (end of slice) to oldest, accumulating height.
 	// Stop when we exceed the screen height limit.
 	for i := len(a.notifications) - 1; i >= 0; i-- {
 		n := a.notifications[i]
-		rendered := a.renderNotification(n, ss.Notification, maxWidth, opts.MaxLines)
-		notifH := lipgloss.Height(rendered)
-		notifW := layout.Width(rendered)
+		rendered := a.renderNotification(n, ss.Notification, maxWidth, opts.MaxLines, maxTotalHeight-currentHeight)
+		notifH := lipgloss.Height(rendered.content)
+		notifW := layout.Width(rendered.content)
 
 		if currentHeight+notifH > maxTotalHeight {
+			for j := i; j >= 0; j-- {
+				a.notifications[j].hoveredAction = -1
+			}
 			break // Oldest notifications are pushed out of view.
 		}
 
 		x, y := a.computeNotificationPosition(opts.Anchor, w, h, notifW, notifH, currentHeight, gap)
-		n.setBounds(x, y, notifW, notifH)
+		n.setBounds(x, y, notifW, notifH, rendered.actionBounds, rendered.actionArea)
 
-		layers = append(layers, layout.NewLayer(rendered).X(x).Y(y))
+		layers = append(layers, layout.NewLayer(rendered.content).X(x).Y(y))
 		currentHeight += notifH
 	}
 
 	return layout.NewCompositor(layers...).Render()
 }
 
+type notificationRender struct {
+	content      string
+	actionBounds []notificationRect
+	actionArea   notificationRect
+}
+
+type notificationActionsRender struct {
+	content string
+	height  int
+	bounds  []notificationRect
+}
+
+func renderNotificationActions(n *Notification, styles style.NotificationStyleSet, maxWidth int) notificationActionsRender {
+	if len(n.spec.Actions) == 0 || maxWidth <= 0 {
+		return notificationActionsRender{}
+	}
+
+	type actionRow struct {
+		content strings.Builder
+		width   int
+	}
+
+	rows := []actionRow{{}}
+	bounds := make([]notificationRect, len(n.spec.Actions))
+	for i, action := range n.spec.Actions {
+		buttonStyle := styles.Action
+		if i == n.hoveredAction {
+			buttonStyle = styles.ActionHover
+		}
+		button := buttonStyle.Render(action.Label)
+		buttonWidth := lipgloss.Width(button)
+		if buttonWidth > maxWidth {
+			button = lipgloss.NewStyle().MaxWidth(maxWidth).Render(button)
+			buttonWidth = lipgloss.Width(button)
+		}
+
+		row := &rows[len(rows)-1]
+		gap := 0
+		if row.width > 0 {
+			gap = 1
+		}
+		if row.width > 0 && row.width+gap+buttonWidth > maxWidth {
+			rows = append(rows, actionRow{})
+			row = &rows[len(rows)-1]
+			gap = 0
+		}
+		if gap > 0 {
+			row.content.WriteString(lipgloss.NewStyle().Background(styles.Surface).Render(" "))
+		}
+		bounds[i] = notificationRect{x: row.width + gap, y: len(rows) - 1, w: buttonWidth, h: 1}
+		row.content.WriteString(button)
+		row.width += gap + buttonWidth
+	}
+
+	rowTexts := make([]string, len(rows))
+	for i, row := range rows {
+		xOffset := maxWidth - row.width
+		for j := range bounds {
+			if bounds[j].y == i {
+				bounds[j].x += xOffset
+			}
+		}
+		rowTexts[i] = lipgloss.NewStyle().
+			Width(maxWidth).
+			Align(lipgloss.Right).
+			Background(styles.Surface).
+			Render(row.content.String())
+	}
+
+	return notificationActionsRender{
+		content: strings.Join(rowTexts, "\n"),
+		height:  len(rows),
+		bounds:  bounds,
+	}
+}
+
 // renderNotification renders a single notification with the given constraints.
-func (a *App) renderNotification(n *Notification, styles style.NotificationStyleSet, maxWidth, maxLines int) string {
+func (a *App) renderNotification(n *Notification, styles style.NotificationStyleSet, maxWidth, maxLines, maxHeight int) notificationRender {
 	spec := n.spec
 
-	// Select frame style and icon based on level.
 	var frameStyle lipgloss.Style
 	var icon string
 	switch spec.Level {
@@ -850,78 +981,89 @@ func (a *App) renderNotification(n *Notification, styles style.NotificationStyle
 		icon = styles.ErrorIcon
 	}
 
-	// Content width = maxWidth - frame overhead (2 border + 2 padding).
-	contentWidth := maxWidth - 4
-	if contentWidth < 10 {
-		contentWidth = 10
-	}
-
-	var blocks []string
+	// Whole width includes two border and two padding columns.
+	contentWidth := max(maxWidth-4, 10)
+	actions := renderNotificationActions(n, styles, contentWidth)
 
 	titleHeight := 0
 	titleText := ""
-
-	// Build unified content lines: title (if present) + body lines.
-	var allLines []string
 	if spec.Title != "" {
 		titleHeight = 1
 		titleText = icon + spec.Title
+	}
+
+	actionSpacer := 0
+	if actions.height > 0 && (spec.Title != "" || spec.Message != "") {
+		actionSpacer = 1
+	}
+	bodyLimit := max(maxLines, 1)
+	if maxHeight > 0 {
+		bodyLimit = min(bodyLimit, max(0, maxHeight-2-titleHeight-actionSpacer-actions.height))
+	}
+
+	var bodyLines []string
+	if spec.Message != "" && bodyLimit > 0 {
+		wrapped := lipgloss.NewStyle().MaxWidth(contentWidth).Render(spec.Message)
+		bodyLines = strings.Split(wrapped, "\n")
+		if len(bodyLines) > bodyLimit {
+			bodyLines = bodyLines[:bodyLimit]
+			last := len(bodyLines) - 1
+			bodyLines[last] = ansi.Truncate(bodyLines[last], contentWidth-1, "…")
+		}
+	}
+	if titleHeight == 0 && len(bodyLines) == 0 {
+		actionSpacer = 0
+	}
+
+	allLines := make([]string, 0, titleHeight+len(bodyLines))
+	if titleHeight > 0 {
 		allLines = append(allLines, titleText)
 	}
-	if spec.Message != "" {
-		wrapped := lipgloss.NewStyle().MaxWidth(contentWidth).Render(spec.Message)
-		bodyLines := strings.Split(wrapped, "\n")
-		// Truncate to maxLines if needed, adding ellipsis on the last visible line.
-		if len(bodyLines) > maxLines {
-			bodyLines = bodyLines[:maxLines]
-			lastLine := bodyLines[maxLines-1]
-			lastLine = ansi.Truncate(lastLine, contentWidth-1, "…")
-			bodyLines[maxLines-1] = lastLine
-		}
-		allLines = append(allLines, bodyLines...)
-	}
-
-	// Cache geometry for hit-testing.
+	allLines = append(allLines, bodyLines...)
 	n.setContentGeometry(allLines, contentWidth, titleHeight, titleText)
 
-	// Apply selection highlight across all content lines.
 	displayLines := allLines
 	if n.hasSelection && len(allLines) > 0 {
 		displayLines = n.applySelectionHighlight(allLines, contentWidth)
 	}
 
-	// Render first line as title (if present), remaining as body.
+	var blocks []string
 	remainingLines := displayLines
 	if titleHeight > 0 && len(displayLines) > 0 {
-		titleLine := displayLines[0]
-		// Truncate title text to fit contentWidth-2 (reserve space for close btn)
-		titleRunes := []rune(titleLine)
-		effectiveWidth := contentWidth - 2
-		if effectiveWidth < 1 {
-			effectiveWidth = 1
-		}
+		titleRunes := []rune(displayLines[0])
+		effectiveWidth := max(contentWidth-2, 1)
 		if len(titleRunes) > effectiveWidth {
 			titleRunes = append(titleRunes[:effectiveWidth-1], '…')
 		}
-		truncatedTitle := string(titleRunes)
-		// Render title text left-aligned in contentWidth-2, padded to fill
-		titleRendered := styles.Title.Width(contentWidth - 2).Render(truncatedTitle)
-		// Close button: muted foreground, same background as notification
-		closeBtn := style.CurrentStyleSet().Muted.Copy().Background(styles.Title.GetBackground()).Render(" ✕")
-		blocks = append(blocks, titleRendered+closeBtn)
+		titleRendered := styles.Title.Width(contentWidth - 2).Render(string(titleRunes))
+		blocks = append(blocks, titleRendered+styles.Close.Render(" ✕"))
 		remainingLines = displayLines[1:]
 	}
 	if len(remainingLines) > 0 {
-		msg := styles.Message.Width(contentWidth).Render(strings.Join(remainingLines, "\n"))
-		blocks = append(blocks, msg)
+		blocks = append(blocks, styles.Message.Width(contentWidth).Render(strings.Join(remainingLines, "\n")))
 	}
 
-	// Join title and message vertically.
-	inner := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	rendered := notificationRender{}
+	if actions.height > 0 {
+		if len(blocks) > 0 {
+			blocks = append(blocks, lipgloss.NewStyle().Width(contentWidth).Background(styles.Surface).Render(""))
+		}
+		actionY := 1 + len(allLines) + actionSpacer
+		for _, bound := range actions.bounds {
+			rendered.actionBounds = append(rendered.actionBounds, notificationRect{
+				x: 2 + bound.x,
+				y: actionY + bound.y,
+				w: bound.w,
+				h: bound.h,
+			})
+		}
+		rendered.actionArea = notificationRect{x: 2, y: actionY, w: contentWidth, h: actions.height}
+		blocks = append(blocks, actions.content)
+	}
 
-	// Apply the frame.
-	framed := frameStyle.Render(inner)
-	return framed
+	inner := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	rendered.content = frameStyle.Render(inner)
+	return rendered
 }
 
 // computeNotificationPosition calculates the (x, y) position for a notification

@@ -52,20 +52,37 @@ type PopupTheme struct {
 	Action        Highlight
 	ActionFocused Highlight
 	ActionHover   Highlight
+
+	// Context menu rows share the popup surface while exposing their own frame
+	// and interactive states.
+	ContextMenuBorder       color.Color // nil → #5C5C5C on dark backgrounds, #A8A8A8 on light
+	ContextMenuItem         Highlight   // fg→terminal default, bg→Popup.Surface
+	ContextMenuItemFocused  Highlight   // fg/bg→SelectedItem
+	ContextMenuItemHover    Highlight   // bg→SelectedItem.Bg, underline→false
+	ContextMenuItemDisabled Highlight   // fg→Theme.Muted, bg→Popup.Surface
+	ContextMenuHeader       Highlight   // fg→Primary, bold→true, bg→Popup.Surface (分组标题行)
+	ContextMenuSeparator    color.Color // nil → ContextMenuBorder
 }
 
 // PopupStyleSet is the resolved, render-ready popup visual surface.
 type PopupStyleSet struct {
 	Surface color.Color
 
-	Frame         lipgloss.Style
-	Title         lipgloss.Style
-	Content       lipgloss.Style
-	Action        lipgloss.Style
-	ActionFocused lipgloss.Style
-	ActionHover   lipgloss.Style
-	ScrollTrack   lipgloss.Style
-	ScrollThumb   lipgloss.Style
+	Frame                   lipgloss.Style
+	Title                   lipgloss.Style
+	Content                 lipgloss.Style
+	Action                  lipgloss.Style
+	ActionFocused           lipgloss.Style
+	ActionHover             lipgloss.Style
+	ScrollTrack             lipgloss.Style
+	ScrollThumb             lipgloss.Style
+	ContextMenuFrame        lipgloss.Style
+	ContextMenuItem         lipgloss.Style
+	ContextMenuItemFocused  lipgloss.Style
+	ContextMenuItemHover    lipgloss.Style
+	ContextMenuItemDisabled lipgloss.Style
+	ContextMenuHeader       lipgloss.Style
+	ContextMenuSeparator    lipgloss.Style
 }
 
 // NotificationTheme groups the visual tokens for the notification system.
@@ -81,8 +98,13 @@ type NotificationTheme struct {
 
 	// Title and Message apply only foreground and text attributes; their
 	// backgrounds are forced to Surface so they cannot fragment the surface.
+	// Message foreground is unset by default and inherits the terminal color.
 	Title   Highlight
 	Message Highlight
+
+	// Action backgrounds are intentional interactive-state affordances.
+	Action      Highlight
+	ActionHover Highlight
 
 	// Per-level icon prefixes (optional; falls back to defaults).
 	InfoIcon    string
@@ -100,8 +122,11 @@ type NotificationStyleSet struct {
 	WarningFrame lipgloss.Style
 	ErrorFrame   lipgloss.Style
 
-	Title   lipgloss.Style
-	Message lipgloss.Style
+	Title       lipgloss.Style
+	Message     lipgloss.Style
+	Close       lipgloss.Style
+	Action      lipgloss.Style
+	ActionHover lipgloss.Style
 
 	// Level icon prefixes (Unicode).
 	InfoIcon    string
@@ -622,8 +647,15 @@ func NewStyleSet(theme Theme) StyleSet {
 	theme.Popup.Action = resolvePreset(theme.Popup.Action)
 	theme.Popup.ActionFocused = resolvePreset(theme.Popup.ActionFocused)
 	theme.Popup.ActionHover = resolvePreset(theme.Popup.ActionHover)
+	theme.Popup.ContextMenuItem = resolvePreset(theme.Popup.ContextMenuItem)
+	theme.Popup.ContextMenuItemFocused = resolvePreset(theme.Popup.ContextMenuItemFocused)
+	theme.Popup.ContextMenuItemHover = resolvePreset(theme.Popup.ContextMenuItemHover)
+	theme.Popup.ContextMenuItemDisabled = resolvePreset(theme.Popup.ContextMenuItemDisabled)
+	theme.Popup.ContextMenuHeader = resolvePreset(theme.Popup.ContextMenuHeader)
 	theme.Notification.Title = resolvePreset(theme.Notification.Title)
 	theme.Notification.Message = resolvePreset(theme.Notification.Message)
+	theme.Notification.Action = resolvePreset(theme.Notification.Action)
+	theme.Notification.ActionHover = resolvePreset(theme.Notification.ActionHover)
 	theme.StatusBar = resolvePreset(theme.StatusBar)
 	theme.StatusBarText = resolvePreset(theme.StatusBarText)
 	theme.StatusBarBreadcrumb = resolvePreset(theme.StatusBarBreadcrumb)
@@ -662,17 +694,17 @@ func NewStyleSet(theme Theme) StyleSet {
 		backButtonHL.Bold = BoolPtr(true)
 	}
 
-	// Selected item: compute bg from Primary blend if not set
+	// Selected item: compute a low-contrast bg from Primary if not set.
 	selectedItemHL := resolveHL(theme.SelectedItem, theme.Primary, nil)
 	if selectedItemHL.Bg == nil {
 		if primary, ok := colorful.MakeColor(theme.Primary); ok {
 			if bg, ok := colorful.MakeColor(theme.Background); ok {
 				_, _, l := bg.Hsl()
 				if l > 0.5 {
-					selectedItemHL.Bg = primary.BlendLab(bg, 0.9).Clamped()
+					selectedItemHL.Bg = primary.BlendLab(bg, 0.94).Clamped()
 				} else {
 					highlighted := primary.BlendLab(colorful.Color{R: 1, G: 1, B: 1}, 0.8)
-					selectedItemHL.Bg = highlighted.BlendLab(bg, 0.7).Clamped()
+					selectedItemHL.Bg = highlighted.BlendLab(bg, 0.78).Clamped()
 				}
 			}
 		}
@@ -727,6 +759,23 @@ func NewStyleSet(theme Theme) StyleSet {
 	popupContentHL := resolveHL(theme.Popup.Content, theme.Foreground, nil)
 	popupActionHL := resolveHL(theme.Popup.Action, theme.Primary, theme.Muted)
 	popupActionFocusedHL := resolveHL(theme.Popup.ActionFocused, lipgloss.Color("#FFFFFF"), theme.Primary)
+	contextMenuBorderColor := color.Color(lipgloss.Color("#A8A8A8"))
+	if bgIsDark {
+		contextMenuBorderColor = lipgloss.Color("#5C5C5C")
+	}
+	contextMenuBorderColor = or(theme.Popup.ContextMenuBorder, contextMenuBorderColor)
+	contextMenuItemHL := resolveHL(theme.Popup.ContextMenuItem, nil, popupSurface)
+	contextMenuItemFocusedHL := resolveHL(theme.Popup.ContextMenuItemFocused, selectedItemHL.Fg, selectedItemHL.Bg)
+	contextMenuItemHoverHL := resolveHL(theme.Popup.ContextMenuItemHover, contextMenuItemHL.Fg, selectedItemHL.Bg)
+	if contextMenuItemHoverHL.Underline == nil {
+		contextMenuItemHoverHL.Underline = BoolPtr(false)
+	}
+	contextMenuItemDisabledHL := resolveHL(theme.Popup.ContextMenuItemDisabled, theme.Muted, popupSurface)
+	contextMenuHeaderHL := resolveHL(theme.Popup.ContextMenuHeader, theme.Primary, popupSurface)
+	if contextMenuHeaderHL.Bold == nil {
+		contextMenuHeaderHL.Bold = BoolPtr(true)
+	}
+	contextMenuSeparatorColor := or(theme.Popup.ContextMenuSeparator, contextMenuBorderColor)
 
 	// Scrollbar: global configurable elements for consistent look across components.
 	scrollTrackHL := resolveHL(theme.ScrollTrack, theme.Secondary, nil)
@@ -868,6 +917,19 @@ func NewStyleSet(theme Theme) StyleSet {
 			Padding(0, 2),
 		ActionHover: applyHL(lipgloss.NewStyle(), popupActionHoverHL).
 			Padding(0, 2),
+		ContextMenuFrame: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(contextMenuBorderColor).
+			BorderBackground(popupSurface).
+			Background(popupSurface),
+		ContextMenuItem:         applyHL(lipgloss.NewStyle(), contextMenuItemHL),
+		ContextMenuItemFocused:  applyHL(lipgloss.NewStyle(), contextMenuItemFocusedHL),
+		ContextMenuItemHover:    applyHL(lipgloss.NewStyle(), contextMenuItemHoverHL),
+		ContextMenuItemDisabled: applyHL(lipgloss.NewStyle(), contextMenuItemDisabledHL),
+		ContextMenuHeader:       applyHL(lipgloss.NewStyle(), contextMenuHeaderHL),
+		ContextMenuSeparator: lipgloss.NewStyle().
+			Foreground(contextMenuSeparatorColor).
+			Background(popupSurface),
 		ScrollTrack: applyHL(lipgloss.NewStyle().
 			Background(popupSurface).
 			Faint(true), scrollTrackHL),
@@ -891,7 +953,19 @@ func NewStyleSet(theme Theme) StyleSet {
 	if notifTitleHL.Bold == nil {
 		notifTitleHL.Bold = BoolPtr(true)
 	}
-	notifMessageHL := resolveHL(theme.Notification.Message, theme.Foreground, nil)
+	notifMessageHL := resolveHL(theme.Notification.Message, nil, nil)
+	// Keep default actions visible without letting their background dominate the notification.
+	notifActionBg := theme.Muted
+	if muted, ok := colorful.MakeColor(theme.Muted); ok {
+		if surface, ok := colorful.MakeColor(notifSurface); ok {
+			notifActionBg = muted.BlendLab(surface, 0.6).Clamped()
+		}
+	}
+	notifActionHL := resolveHL(theme.Notification.Action, theme.Primary, notifActionBg)
+	notifActionHoverHL := resolveHL(theme.Notification.ActionHover, notifActionHL.Fg, notifActionHL.Bg)
+	if notifActionHoverHL.Underline == nil {
+		notifActionHoverHL.Underline = BoolPtr(true)
+	}
 
 	notifFrame := func(border color.Color) lipgloss.Style {
 		return lipgloss.NewStyle().
@@ -910,10 +984,15 @@ func NewStyleSet(theme Theme) StyleSet {
 		ErrorFrame:   notifFrame(or(theme.Notification.ErrorBorder, theme.Error)),
 		Title:        applyPopupText(lipgloss.NewStyle(), notifTitleHL, notifSurface),
 		Message:      applyPopupText(lipgloss.NewStyle(), notifMessageHL, notifSurface),
-		InfoIcon:     orString(theme.Notification.InfoIcon, "ℹ "),
-		SuccessIcon:  orString(theme.Notification.SuccessIcon, "✓ "),
-		WarningIcon:  orString(theme.Notification.WarningIcon, "⚠ "),
-		ErrorIcon:    orString(theme.Notification.ErrorIcon, "✗ "),
+		Close:        applyHL(lipgloss.NewStyle(), Highlight{Fg: theme.Muted, Bg: notifSurface}),
+		Action: applyHL(lipgloss.NewStyle(), notifActionHL).
+			Padding(0, 1),
+		ActionHover: applyHL(lipgloss.NewStyle(), notifActionHoverHL).
+			Padding(0, 1),
+		InfoIcon:    orString(theme.Notification.InfoIcon, "ℹ "),
+		SuccessIcon: orString(theme.Notification.SuccessIcon, "✓ "),
+		WarningIcon: orString(theme.Notification.WarningIcon, "⚠ "),
+		ErrorIcon:   orString(theme.Notification.ErrorIcon, "✗ "),
 	}
 
 	// Semantic colors

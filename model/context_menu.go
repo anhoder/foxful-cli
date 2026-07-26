@@ -6,10 +6,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/anhoder/foxful-cli/style"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
-	contextMenuFrameOverhead = 2 // rounded border only (no padding inside frame)
+	contextMenuFrameOverhead  = 2 // rounded border only (no padding inside frame)
+	contextMenuMinInnerWidth  = 8
+	contextMenuHorizontalPad  = 2 // 1 cell on each side of an item label
+	contextMenuScrollbarWidth = 1
 )
 
 // ContextMenuItem describes a single entry in a context menu.
@@ -18,16 +22,20 @@ type ContextMenuItem struct {
 	Label     string
 	Disabled  bool
 	Separator bool // when true, renders as a separator line; other fields ignored
+	Header    bool // 分组标题行：不可选中、加粗、显示 Label
 }
 
 // ContextMenu is a vertical list modal anchored at mouse coordinates.
 // It appears on right-click and executes Menu.ContextMenuAction when an item is selected.
 type ContextMenu struct {
-	menu      Menu
-	itemIndex int // the menu list item that was right-clicked
-	items     []ContextMenuItem
-	mouseX    int
-	mouseY    int
+	menu         Menu
+	itemIndex    int // the menu list item that was right-clicked
+	items        []ContextMenuItem
+	mouseX       int
+	mouseY       int
+	maxWidth     int
+	maxHeight    int
+	scrollOffset int
 
 	focused     int // keyboard-focused item index (-1 = none)
 	hovered     int // mouse-hovered item index (-1 = none)
@@ -40,20 +48,23 @@ type ContextMenu struct {
 	itemBounds []popupRect // absolute screen coordinates for each selectable item
 }
 
-// NewContextMenu constructs a context menu anchored at (mouseX, mouseY).
+// NewContextMenu constructs an unlimited context menu anchored at (mouseX, mouseY).
 func NewContextMenu(menu Menu, itemIndex int, items []ContextMenuItem, mouseX, mouseY int) *ContextMenu {
-	cm := &ContextMenu{
+	return newContextMenu(menu, itemIndex, items, mouseX, mouseY, ContextMenuOptions{})
+}
+
+func newContextMenu(menu Menu, itemIndex int, items []ContextMenuItem, mouseX, mouseY int, options ContextMenuOptions) *ContextMenu {
+	return &ContextMenu{
 		menu:      menu,
 		itemIndex: itemIndex,
 		items:     items,
 		mouseX:    mouseX,
 		mouseY:    mouseY,
+		maxWidth:  max(options.MaxWidth, 0),
+		maxHeight: max(options.MaxHeight, 0),
 		focused:   -1,
 		hovered:   -1,
 	}
-	// Initialize focused to first selectable item
-	cm.focused = cm.firstSelectableFrom(0, 1)
-	return cm
 }
 
 func (cm *ContextMenu) isSelectable(index int) bool {
@@ -61,7 +72,7 @@ func (cm *ContextMenu) isSelectable(index int) bool {
 		return false
 	}
 	item := cm.items[index]
-	return !item.Disabled && !item.Separator
+	return !item.Disabled && !item.Separator && !item.Header
 }
 
 // firstSelectableFrom finds the first selectable item starting at `from`, advancing by `delta`.
@@ -147,12 +158,47 @@ func (cm *ContextMenu) update(msg tea.Msg) {
 		} else {
 			cm.focused = cm.prevSelectable(cm.focused)
 		}
+		cm.ensureFocusedVisible()
 	case "down", "j":
 		if cm.focused == -1 {
 			cm.focused = cm.firstSelectableFrom(0, 1)
 		} else {
 			cm.focused = cm.nextSelectable(cm.focused)
 		}
+		cm.ensureFocusedVisible()
+	}
+}
+
+func (cm *ContextMenu) visibleItemCount() int {
+	visible := len(cm.items)
+	if visible == 0 || cm.maxHeight == 0 {
+		return visible
+	}
+	return min(visible, max(cm.maxHeight-contextMenuFrameOverhead, 1))
+}
+
+func (cm *ContextMenu) maxScrollOffset() int {
+	return max(len(cm.items)-cm.visibleItemCount(), 0)
+}
+
+func (cm *ContextMenu) isScrollable() bool {
+	return cm.maxScrollOffset() > 0
+}
+
+func (cm *ContextMenu) scrollBy(delta int) {
+	cm.scrollOffset = min(max(cm.scrollOffset+delta, 0), cm.maxScrollOffset())
+	cm.hovered = -1
+}
+
+func (cm *ContextMenu) ensureFocusedVisible() {
+	if cm.focused < 0 {
+		return
+	}
+	visible := cm.visibleItemCount()
+	if cm.focused < cm.scrollOffset {
+		cm.scrollOffset = cm.focused
+	} else if cm.focused >= cm.scrollOffset+visible {
+		cm.scrollOffset = cm.focused - visible + 1
 	}
 }
 
@@ -184,6 +230,17 @@ func (cm *ContextMenu) handleMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 		return false, hoverCmd
 	}
 
+	if cm.isScrollable() {
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			cm.scrollBy(-1)
+			return true, setMousePointer("default")
+		case tea.MouseWheelDown:
+			cm.scrollBy(1)
+			return true, setMousePointer("default")
+		}
+	}
+
 	// Handle click inside menu
 	if _, isClick := msg.(tea.MouseClickMsg); isClick && mouse.Button == tea.MouseLeft {
 		if cm.hovered >= 0 && cm.hovered < len(cm.items) && cm.isSelectable(cm.hovered) {
@@ -206,97 +263,105 @@ func (cm *ContextMenu) itemAt(x, y int) int {
 	return -1
 }
 
+func (cm *ContextMenu) itemStyle(styles style.StyleSet, index int) lipgloss.Style {
+	item := cm.items[index]
+	switch {
+	case item.Disabled:
+		return styles.Popup.ContextMenuItemDisabled
+	case index == cm.hovered:
+		return styles.Popup.ContextMenuItemHover
+	case index == cm.focused:
+		return styles.Popup.ContextMenuItemFocused
+	default:
+		return styles.Popup.ContextMenuItem
+	}
+}
+
 // renderModal renders the context menu as a vertical list with rounded border.
 func (cm *ContextMenu) renderModal(styles style.StyleSet) modalRender {
 	if len(cm.items) == 0 {
 		return modalRender{content: "", itemBounds: nil}
 	}
 
-	ss := styles
-	surface := styles.Popup.Surface
-	// Use frame foreground as separator color
-	borderFg := styles.Popup.Frame.GetForeground()
+	visibleCount := cm.visibleItemCount()
+	cm.scrollOffset = min(cm.scrollOffset, cm.maxScrollOffset())
+	visibleStart := cm.scrollOffset
+	visibleEnd := visibleStart + visibleCount
+	scrolling := visibleCount < len(cm.items)
 
-	// Build item rows
-	var rows []string
 	maxLabelWidth := 0
 	for _, item := range cm.items {
 		if !item.Separator {
-			w := lipgloss.Width(item.Label)
-			if w > maxLabelWidth {
-				maxLabelWidth = w
-			}
+			maxLabelWidth = max(maxLabelWidth, lipgloss.Width(item.Label))
 		}
 	}
 
-	// Inner width: max label + horizontal padding (1 cell each side)
-	innerWidth := maxLabelWidth + 2
-	if innerWidth < 8 {
-		innerWidth = 8 // minimum width for usability
+	scrollbarWidth := 0
+	if scrolling {
+		scrollbarWidth = contextMenuScrollbarWidth
+	}
+	innerWidth := max(maxLabelWidth+contextMenuHorizontalPad, contextMenuMinInnerWidth) + scrollbarWidth
+	if cm.maxWidth > 0 {
+		minInnerWidth := contextMenuHorizontalPad + 1 + scrollbarWidth
+		maxInnerWidth := max(cm.maxWidth-contextMenuFrameOverhead, minInnerWidth)
+		innerWidth = min(innerWidth, maxInnerWidth)
+	}
+	itemWidth := innerWidth - scrollbarWidth
+	labelWidth := max(itemWidth-contextMenuHorizontalPad, 1)
+
+	thumbRow := -1
+	if scrolling {
+		thumbRow = cm.scrollOffset * (visibleCount - 1) / cm.maxScrollOffset()
 	}
 
-	// Render each item
-	for i, item := range cm.items {
+	rows := make([]string, 0, visibleCount)
+	itemBounds := make([]popupRect, len(cm.items))
+	for itemIndex := visibleStart; itemIndex < visibleEnd; itemIndex++ {
+		item := cm.items[itemIndex]
+		visibleRow := itemIndex - visibleStart
 		var row string
 		if item.Separator {
-			// Render separator as horizontal line
-			sep := strings.Repeat("─", innerWidth)
-			row = lipgloss.NewStyle().
-				Foreground(borderFg).
-				Background(surface).
-				Width(innerWidth).
-				Render(sep)
+			row = styles.Popup.ContextMenuSeparator.
+				Width(itemWidth).
+				Render(strings.Repeat("─", itemWidth))
 		} else {
-			// Choose style based on state
-			itemStyle := lipgloss.NewStyle().
-				Foreground(ss.MenuItem.GetForeground()).
-				Background(surface).
-				Width(innerWidth).
-				Padding(0, 1)
-
-			if item.Disabled {
-				itemStyle = itemStyle.Foreground(ss.Muted.GetForeground())
-			} else if i == cm.focused && i == cm.hovered {
-				itemStyle = itemStyle.
-					Foreground(ss.SelectedItem.GetForeground()).
-					Background(ss.SelectedItem.GetBackground()).
-					Underline(true)
-			} else if i == cm.focused {
-				itemStyle = itemStyle.
-					Foreground(ss.SelectedItem.GetForeground()).
-					Background(ss.SelectedItem.GetBackground())
-			} else if i == cm.hovered {
-				itemStyle = itemStyle.
-					Foreground(ss.MenuItemHover.GetForeground()).
-					Underline(true)
+			label := ansi.Truncate(item.Label, labelWidth, "…")
+			if item.Header {
+				row = styles.Popup.ContextMenuHeader.
+					Width(itemWidth).
+					Padding(0, 1).
+					Render(label)
+			} else {
+				row = cm.itemStyle(styles, itemIndex).
+					Width(itemWidth).
+					Padding(0, 1).
+					Render(label)
 			}
+		}
 
-			row = itemStyle.Render(item.Label)
+		if scrolling {
+			scrollbar := styles.Popup.ScrollTrack.Render("│")
+			if visibleRow == thumbRow {
+				scrollbar = styles.Popup.ScrollThumb.Render("█")
+			}
+			row += scrollbar
 		}
 		rows = append(rows, row)
+
+		if cm.isSelectable(itemIndex) {
+			itemBounds[itemIndex] = popupRect{
+				x: 1,
+				y: 1 + visibleRow,
+				w: itemWidth,
+				h: 1,
+			}
+		}
 	}
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	framed := styles.Popup.Frame.
-		Padding(0). // No internal padding, border only
+	framed := styles.Popup.ContextMenuFrame.
+		Padding(0).
 		Render(inner)
-
-	// Compute item bounds (relative to menu top-left)
-	itemBounds := make([]popupRect, len(cm.items))
-	for i := range cm.items {
-		if cm.isSelectable(i) {
-			// Item is at row (1 + i) due to top border, spans innerWidth
-			itemBounds[i] = popupRect{
-				x: 1,     // left border offset
-				y: 1 + i, // top border + row index
-				w: innerWidth,
-				h: 1,
-			}
-		} else {
-			// Non-selectable items get zero bounds
-			itemBounds[i] = popupRect{x: 0, y: 0, w: 0, h: 0}
-		}
-	}
 
 	return modalRender{
 		content:    framed,
@@ -307,9 +372,9 @@ func (cm *ContextMenu) renderModal(styles style.StyleSet) modalRender {
 // computePosition calculates the top-left (x, y) for the context menu.
 // Applies flip+clamp to keep the menu fully visible.
 func (cm *ContextMenu) computePosition(termW, termH, menuW, menuH int) (int, int) {
-	// Default: top-left corner at mouse position
+	// Default: start one row below the clicked item
 	x := cm.mouseX
-	y := cm.mouseY
+	y := cm.mouseY + 1
 
 	// Flip horizontally if it would overflow right edge
 	if x+menuW > termW {
@@ -319,15 +384,7 @@ func (cm *ContextMenu) computePosition(termW, termH, menuW, menuH int) (int, int
 		}
 	}
 
-	// Flip vertically if it would overflow bottom edge
-	if y+menuH > termH {
-		y = cm.mouseY - menuH
-		if y < 0 {
-			y = 0
-		}
-	}
-
-	// Final clamp to screen bounds
+	// Clamp to the screen edges, keeping an overflowing menu as low as possible.
 	if x < 0 {
 		x = 0
 	}

@@ -74,8 +74,8 @@ func SetAccessibleMode(on bool) {
 // keeping the following states visible in monochrome terminals:
 //
 //   - the selected menu/list item
-//   - the hovered item and hovered selected item
-//   - focused buttons and the focused popup action
+//   - hovered menu items and notification actions
+//   - focused buttons and popup actions
 //   - the hovered back button
 func applyAccessibleEmphasis(s StyleSet) StyleSet {
 	s.SelectedItem = s.SelectedItem.Reverse(true).Bold(true)
@@ -86,6 +86,8 @@ func applyAccessibleEmphasis(s StyleSet) StyleSet {
 	s.BackButtonHover = s.BackButtonHover.Reverse(true).Bold(true)
 	s.Popup.ActionFocused = s.Popup.ActionFocused.Reverse(true).Bold(true)
 	s.Popup.ActionHover = s.Popup.ActionHover.Underline(true)
+	s.Notification.Action = s.Notification.Action.Reverse(true).Bold(true)
+	s.Notification.ActionHover = s.Notification.ActionHover.Reverse(true).Bold(true).Underline(true)
 	return s
 }
 

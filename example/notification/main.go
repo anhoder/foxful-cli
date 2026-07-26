@@ -25,14 +25,15 @@ func NewDemoMenu() *DemoMenu {
 			{Title: "Long Message", Subtitle: "Truncated to 5 lines"},
 			{Title: "Progress Update", Subtitle: "Shows update flow"},
 			{Title: "Spam 10", Subtitle: "Test stacking limit"},
+			{Title: "Action Buttons", Subtitle: "Retry or inspect a failed operation"},
 			{Title: "Clear All", Subtitle: "Dismiss all notifications"},
 		},
 	}
 }
 
-func (m *DemoMenu) IsSearchable() bool         { return true }
-func (m *DemoMenu) GetMenuKey() string          { return "notification_demo" }
-func (m *DemoMenu) MenuViews() []model.MenuItem { return m.menus }
+func (m *DemoMenu) IsSearchable() bool                     { return true }
+func (m *DemoMenu) GetMenuKey() string                     { return "notification_demo" }
+func (m *DemoMenu) MenuViews() []model.MenuItem            { return m.menus }
 func (m *DemoMenu) SubMenu(_ *model.App, _ int) model.Menu { return nil }
 
 func (m *DemoMenu) Action(app *model.App, index int) (model.Page, tea.Cmd) {
@@ -112,6 +113,24 @@ Line 7: This line should also be hidden.`
 			})
 		}
 	case 7:
+		app.Notify(model.NotificationSpec{
+			Level:   model.NotificationError,
+			Title:   "Deployment Failed",
+			Message: "gateway-42 failed its health check.",
+			Actions: []model.NotificationAction{
+				{ID: "retry", Label: "Retry"},
+				{ID: "details", Label: "Details"},
+			},
+			OnAction: func(result model.NotificationActionResult) {
+				app.Notify(model.NotificationSpec{
+					Level:   model.NotificationInfo,
+					Title:   "Action Selected",
+					Message: fmt.Sprintf("Notification %d: %s", result.NotificationID, result.ActionID),
+					Timeout: 3 * time.Second,
+				})
+			},
+		})
+	case 8:
 		app.ClearAllNotifications()
 	}
 	return nil, app.RerenderCmd(true)

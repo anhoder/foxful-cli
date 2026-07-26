@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anhoder/foxful-cli/layout"
 	"github.com/anhoder/foxful-cli/util"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestStartupAnimationProgress(t *testing.T) {
@@ -31,35 +31,34 @@ func TestStartupAnimationProgress(t *testing.T) {
 	}
 }
 
-func TestTypewriterRevealMovesThroughOneLetterFromLeftToRight(t *testing.T) {
-	logo := util.GetAlphaAscii("AB")
-	firstLetterWidth := layout.Width(util.GetAlphaAscii("A"))
-	fullWidth := layout.Width(logo)
+func TestStartupSequenceUsesFadeRainbowAndGlitchStages(t *testing.T) {
+	oldProfile := util.TermProfile
+	util.TermProfile = colorprofile.TrueColor
+	t.Cleanup(func() { util.TermProfile = oldProfile })
 
-	quarter := typewriterRevealWidth(logo, "AB", .25)
-	if quarter <= 0 || quarter >= firstLetterWidth {
-		t.Fatalf("quarter progress should be inside the first letter: got %d, letter width %d", quarter, firstLetterWidth)
-	}
-
-	half := typewriterRevealWidth(logo, "AB", .5)
-	if half != firstLetterWidth {
-		t.Fatalf("half progress should finish only the first letter: got %d, want %d", half, firstLetterWidth)
-	}
-
-	threeQuarter := typewriterRevealWidth(logo, "AB", .75)
-	if threeQuarter <= firstLetterWidth || threeQuarter >= fullWidth {
-		t.Fatalf("three-quarter progress should be inside the second letter: got %d, range (%d, %d)", threeQuarter, firstLetterWidth, fullWidth)
-	}
-}
-
-func TestTypewriterMaskKeepsLogoWidth(t *testing.T) {
-	logo := util.GetAlphaAscii("AB")
-	masked := maskStartupLogoColumns(logo, typewriterRevealWidth(logo, "AB", .25))
-	if got, want := layout.Width(masked), layout.Width(logo); got != want {
-		t.Fatalf("masked logo width = %d, want stable width %d", got, want)
-	}
-	if strings.Contains(masked, "█") && masked == logo {
-		t.Fatalf("early typewriter frame unexpectedly rendered full logo: %q", masked)
+	for _, tt := range []struct {
+		name   string
+		loaded time.Duration
+		want   startupLogoEffect
+	}{
+		{name: "starts with fade", loaded: 200 * time.Millisecond, want: logoFade},
+		{name: "continues with rainbow", loaded: 600 * time.Millisecond, want: logoRainbow},
+		{name: "hands off through glitch", loaded: 900 * time.Millisecond, want: logoGlitch},
+		{name: "settles on static logo", loaded: 970 * time.Millisecond, want: logoStatic},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			startup := StartupPage{
+				options: &StartupOptions{
+					Animation:       StartupAnimationSequence,
+					LoadingDuration: time.Second,
+				},
+				loadedDuration: tt.loaded,
+			}
+			got, _, _ := startup.logoEffect()
+			if got != tt.want {
+				t.Fatalf("logoEffect() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

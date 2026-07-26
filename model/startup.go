@@ -31,6 +31,7 @@ type tickStartupMsg struct{}
 type StartupPage struct {
 	options *StartupOptions
 
+	startedAt      time.Time
 	loadedDuration time.Duration
 	loadedPercent  float64
 	loaded         bool
@@ -45,6 +46,7 @@ func NewStartup(options *StartupOptions, nextPage Page) *StartupPage {
 }
 
 func (s *StartupPage) Init(a *App) tea.Cmd {
+	s.startedAt = time.Now()
 	return a.Tick(time.Nanosecond)
 }
 
@@ -63,12 +65,24 @@ func (s *StartupPage) Type() PageType {
 func (s *StartupPage) Update(msg tea.Msg, a *App) (Page, tea.Cmd) {
 	switch msg.(type) {
 	case tickStartupMsg:
-		if s.loadedDuration >= s.options.LoadingDuration {
+		if s.options.LoadingDuration <= 0 {
 			s.loaded = true
 			return s.nextPage, a.RerenderCmd(true)
 		}
-		s.loadedDuration += s.options.TickDuration
-		s.loadedPercent = float64(s.loadedDuration) / float64(s.options.LoadingDuration)
+		if s.startedAt.IsZero() {
+			s.startedAt = time.Now()
+		}
+
+		elapsed := time.Since(s.startedAt)
+		if elapsed >= s.options.LoadingDuration {
+			s.loadedDuration = s.options.LoadingDuration
+			s.loadedPercent = 1
+			s.loaded = true
+			return s.nextPage, a.RerenderCmd(true)
+		}
+
+		s.loadedDuration = elapsed
+		s.loadedPercent = float64(elapsed) / float64(s.options.LoadingDuration)
 		if s.options.ProgressOutBounce {
 			s.loadedPercent = ease.OutBounce(s.loadedPercent)
 		}

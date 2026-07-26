@@ -64,17 +64,23 @@ func (m *MainMenu) ContextMenuItems(_ *model.App, index int) []model.ContextMenu
 		return nil
 	}
 	items := []model.ContextMenuItem{
-		{ID: "play", Label: "Play"},
-		{ID: "queue", Label: "Add to Queue"},
+		{ID: "play", Label: "󰐊  Play"},
+		{ID: "queue", Label: "󰆴  Add to Queue"},
+		{ID: "play_next", Label: "󰒭  Play Next"},
 		{Separator: true},
-		{ID: "delete", Label: "Delete"},
+		{ID: "album", Label: "󰀥  Go to Album"},
+		{ID: "artist", Label: "󰠃  Go to Artist"},
+		{ID: "details", Label: "󰋼  View Track Details"},
+		{Separator: true},
+		{ID: "delete", Label: "󰅖  Delete"},
 	}
-	// Disable "Favorite" for the first item as a demo
+	// Keep this label deliberately long so the configured maximum width
+	// demonstrates ellipsis truncation. Disable it for the first item as a demo.
+	favorite := model.ContextMenuItem{ID: "favorite", Label: "󰓡  Add to a Very Long Favorites Collection"}
 	if index == 0 {
-		items = append(items, model.ContextMenuItem{ID: "favorite", Label: "Add to Favorites", Disabled: true})
-	} else {
-		items = append(items, model.ContextMenuItem{ID: "favorite", Label: "Add to Favorites"})
+		favorite.Disabled = true
 	}
+	items = append(items, favorite)
 	return items
 }
 
@@ -130,6 +136,7 @@ func (m *SecondaryMenu) BeforeEnterMenuHook() model.Hook {
 func main() {
 	opts := model.DefaultOptions()
 	opts.StatusBar = &model.DefaultStatusBar{}
+	opts.ContextMenuOptions = model.ContextMenuOptions{MaxWidth: 24, MaxHeight: 7}
 	// opts.DynamicRowCount = true
 	app := model.NewApp(opts)
 	app.With(model.WithMainMenu(mainMenu, nil))

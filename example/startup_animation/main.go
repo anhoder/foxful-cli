@@ -21,7 +21,6 @@ import (
 var animations = map[string]model.StartupAnimation{
 	"fade-in":        model.StartupAnimationFadeIn,
 	"rainbow-wave":   model.StartupAnimationRainbowWave,
-	"typewriter":     model.StartupAnimationTypewriter,
 	"spinner":        model.StartupAnimationSpinner,
 	"slide-in":       model.StartupAnimationSlideIn,
 	"glitch":         model.StartupAnimationGlitch,
