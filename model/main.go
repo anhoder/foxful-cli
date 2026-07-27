@@ -577,7 +577,7 @@ func (m *Main) View(a *App) string {
 			body = strings.Join(lines[:targetHeight], "\n")
 		}
 	} else if bodyHeight < targetHeight {
-		body = lipgloss.NewStyle().Height(targetHeight).Render(body)
+		body = style.CurrentStyleSet().AppBackground.Height(targetHeight).Render(body)
 	}
 
 	// Combine body + status bar, then wrap with AppBackground.
