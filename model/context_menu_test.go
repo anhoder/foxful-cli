@@ -479,3 +479,18 @@ func TestMainContextMenuUsesConfiguredLimits(t *testing.T) {
 		t.Fatalf("context menu limits = (%d, %d), want (18, 4)", cm.maxWidth, cm.maxHeight)
 	}
 }
+
+func TestTransparentThemeContextMenuHoverUsesPrimary(t *testing.T) {
+	primary := lipgloss.Color("#E040FB")
+	theme := style.DefaultDarkTheme()
+	theme.Primary = primary
+	theme.AppBackground = style.Highlight{Bg: lipgloss.NoColor{}}
+	theme.Popup.Surface = lipgloss.NoColor{}
+	styles := style.NewStyleSet(theme)
+
+	cm := NewContextMenu(&testMenu{}, 0, []ContextMenuItem{{ID: "action", Label: "Action"}}, 0, 0)
+	cm.hovered = 0
+	if got := cm.itemStyle(styles, 0).GetForeground(); got != primary {
+		t.Fatalf("transparent hover foreground = %v, want primary %v", got, primary)
+	}
+}
