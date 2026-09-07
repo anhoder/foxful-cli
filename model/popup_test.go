@@ -35,6 +35,70 @@ func TestNormalizePopupSurfaceOverridesContentBackground(t *testing.T) {
 	}
 }
 
+func TestNormalizePopupSurfaceTransparentSurfaceClearsBackgrounds(t *testing.T) {
+	surface := lipgloss.NoColor{}
+	content := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#00FF00")).
+		Background(lipgloss.Color("#FF0000")).
+		Render("A") + "\x1b[7mB\x1b[0m"
+
+	normalized := normalizePopupSurface(content, surface)
+	// NoColor.RGBA() decodes as opaque black; it must never be emitted.
+	if strings.Contains(normalized, "48;2;0;0;0") {
+		t.Fatalf("normalized output paints opaque black background: %q", normalized)
+	}
+	screen := popupStyledScreen(normalized)
+	for _, line := range screen.Lines {
+		for _, cell := range line {
+			if cell.IsZero() {
+				continue
+			}
+			if cell.Style.Bg != nil {
+				t.Fatalf("cell %q background = %#v, want unpainted for a transparent surface", cell.Content, cell.Style.Bg)
+			}
+			if cell.Style.Attrs&uv.AttrReverse != 0 {
+				t.Fatalf("cell %q retained reverse video", cell.Content)
+			}
+		}
+	}
+}
+
+func TestPopupRenderTransparentSurfaceDoesNotPaintBackground(t *testing.T) {
+	theme := style.DefaultDarkTheme()
+	theme.Popup.Surface = lipgloss.NoColor{}
+	styles := style.NewStyleSet(theme).Popup
+	if _, isNoColor := styles.Surface.(lipgloss.NoColor); !isNoColor {
+		t.Fatalf("test setup: popup surface = %#v, want lipgloss.NoColor", styles.Surface)
+	}
+
+	popup, err := NewPopup(PopupSpec{
+		Title:   "Help",
+		Content: lipgloss.NewStyle().Background(lipgloss.Color("#FF0000")).Render("line one") + "\nline two",
+		Actions: []PopupAction{{ID: "ok", Label: "OK"}},
+	})
+	if err != nil {
+		t.Fatalf("NewPopup() error = %v", err)
+	}
+
+	rendered := popup.render(styles).content
+	// NoColor.RGBA() decodes as opaque black; it must never be emitted.
+	if strings.Contains(rendered, "48;2;0;0;0") {
+		t.Fatalf("popup render paints opaque black background: %q", rendered)
+	}
+	screen := popupStyledScreen(rendered)
+	for y := range screen.Lines {
+		for x := range screen.Lines[y] {
+			cell := screen.CellAt(x, y)
+			if cell == nil || cell.IsZero() {
+				continue
+			}
+			if cell.Style.Bg != nil && samePopupColor(cell.Style.Bg, color.NRGBA{A: 0xff}) {
+				t.Fatalf("cell (%d, %d) %q paints opaque black background %#v", x, y, cell.Content, cell.Style.Bg)
+			}
+		}
+	}
+}
+
 func TestPopupRenderUsesSurfaceForScrolledContent(t *testing.T) {
 	surface := color.NRGBA{R: 24, G: 28, B: 36, A: 255}
 	theme := style.DefaultDarkTheme()
